@@ -1,12 +1,3 @@
-#load "/Users/rob/OneDrive/Dev/F#/prelude.fsx"
-
-
-#r "nuget:System.IO.Pipelines"
-#r "nuget:System.Buffers"
-#r "nuget:TaskBuilder.fs"
-#r "nuget:FParsec"
-
-
 open System
 open System.Buffers
 open System.Collections.Generic
