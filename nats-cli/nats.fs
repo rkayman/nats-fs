@@ -2,15 +2,12 @@ module NATS
 
 open System
 open System.Buffers
-open System.IO
 open System.IO.Pipelines
 open System.Net.Sockets
 open System.Text 
 open System.Threading
 open System.Threading.Tasks
 open FSharp.Control.Tasks.V2.ContextInsensitive
-open BenchmarkDotNet.Attributes
-open BenchmarkDotNet.Running
 
 module Transport = 
 
@@ -116,7 +113,7 @@ module Client =
     let readLoopRec (pipe: Pipe) token processLine = 
         task { 
             let rec processBuffer buf = 
-                match buf.PositionOf((byte)'\n') |> Option.ofNullable with 
+                match buf.PositionOf(byte('\n')) |> Option.ofNullable with 
                 | None -> buf
                 | Some pos -> 
                     processLine(buf.Slice(0, pos)) 
@@ -198,128 +195,3 @@ module Client =
             do! reader.CompleteAsync(error)
         }
 
-
-[<MemoryDiagnoser>]
-type PipeBench() =
-    let pipe = Pipe(PipeOptions.Default)
-    let mutable client : TcpClient = null 
-    let mutable cancel : CancellationTokenSource = null
-    let mutable isFirstTime = true
-
-    let parseLine (bytes: ReadOnlySequence<byte>) = 
-        let msg = Encoding.UTF8.GetString(&bytes).TrimEnd() 
-        printfn $"{msg}" 
-
-    [<GlobalSetup>]
-    member _.Setup() =
-        task {
-            let! tcp = Uri(@"nats://localhost:4222") |> Client.openTcp
-            if client = null then client.Dispose() 
-            client <- tcp 
-            let stream = client.GetStream()
-            use cancel = new CancellationTokenSource(TimeSpan.FromSeconds(5.0))
-            do! Client.subscribe stream cancel.Token 
-        }
-        
-    [<IterationSetup>]
-    member _.IterSetup() =
-        if not isFirstTime then cancel.Dispose() 
-        cancel <- new CancellationTokenSource(TimeSpan.FromSeconds(30.))
-        if isFirstTime then isFirstTime <- false 
-        else pipe.Reset()
-        
-    [<Benchmark(Baseline=true)>]
-    member _.RunBothIterative() =
-        task {
-            let readTask = Client.readLoop pipe cancel.Token parseLine
-            let writeTask = Client.writeLoop client pipe cancel.Token
-            let tasks: Task[] = [|readTask; writeTask|]
-            
-            do! Task.WhenAll(tasks) 
-        }
-        
-    [<Benchmark>]
-    member _.RunWriterIterReadRec() = 
-        task {
-            let readTask = Client.readLoopRec pipe cancel.Token parseLine
-            let writeTask = Client.writeLoop client pipe cancel.Token
-            let tasks: Task[] = [|readTask; writeTask|]
-            
-            do! Task.WhenAll(tasks) 
-        } 
-        
-    [<Benchmark>]
-    member _.RunWriterIterReadRecInner() = 
-        task {
-            let readTask = Client.readLoopRecInner pipe cancel.Token parseLine
-            let writeTask = Client.writeLoop client pipe cancel.Token
-            let tasks: Task[] = [|readTask; writeTask|]
-            
-            do! Task.WhenAll(tasks) 
-        } 
-        
-    [<Benchmark>]
-    member _.RunWriterRecReadIter() = 
-        task {
-            let readTask = Client.readLoop pipe cancel.Token parseLine
-            let writeTask = Client.writeLoopRec client pipe cancel.Token
-            let tasks: Task[] = [|readTask; writeTask|]
-            
-            do! Task.WhenAll(tasks) 
-        } 
-        
-    [<Benchmark>]
-    member _.RunWriterRecReadRec() = 
-        task {
-            let readTask = Client.readLoopRec pipe cancel.Token parseLine
-            let writeTask = Client.writeLoopRec client pipe cancel.Token
-            let tasks: Task[] = [|readTask; writeTask|]
-            
-            do! Task.WhenAll(tasks) 
-        } 
-        
-    [<Benchmark>]
-    member _.RunWriterRecReadRecInner() = 
-        task {
-            let readTask = Client.readLoopRecInner pipe cancel.Token parseLine
-            let writeTask = Client.writeLoopRec client pipe cancel.Token
-            let tasks: Task[] = [|readTask; writeTask|]
-            
-            do! Task.WhenAll(tasks) 
-        } 
-
-
-
-open Spectre.Console
-
-type ProgressTask = { description: string; autoStart: bool option; maxValue: float option  }
-
-//let setupProgressBar 
-
-[<EntryPoint>]
-let main argv =
-    //let conn = NATS.Transport.createConnectionPair PipeOptions.Default PipeOptions.Default 
-//    let pipe = Pipe(PipeOptions.Default) 
-    use cancel = new CancellationTokenSource(TimeSpan.FromMinutes(1.0))
-//    Task.Run(fun () -> Task.WaitAll(NATS.run pipe cancel.Token)) |> ignore
-    let progress = AnsiConsole.Progress().Columns([| TaskDescriptionColumn() :> ProgressColumn
-                                                     ProgressBarColumn() :> ProgressColumn
-                                                     PercentageColumn() :> ProgressColumn
-                                                     SpinnerColumn() :> ProgressColumn |])
-//    progress.AutoRefresh <- false
-    progress.AutoClear <- false
-    progress.HideCompleted <- false
-    let task = progress.StartAsync(fun ctx ->
-                                       task {
-                                       let task = ctx.AddTask("Subscription", true, 100.0)
-                                       while not ctx.IsFinished do
-                                            do! Task.Delay(50)
-                                            task.Increment(1.0)
-//                                            ctx.Refresh() 
-                                       })
-    Task.WaitAll([| task :> Task |], TimeSpan.FromSeconds(10.0)) |> ignore
-    
-    Console.ReadLine() |> ignore
-    if not cancel.IsCancellationRequested then cancel.Cancel() 
-    0 
-    

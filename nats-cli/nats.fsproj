@@ -19,16 +19,16 @@
 
   <ItemGroup>
     <Compile Include="nats.fs" />
-    <Compile Include="UiProgress.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.13.0" />
-    <PackageReference Include="NodaTime" Version="3.0.5" />
-    <PackageReference Include="Spectre.Console" Version="0.39.1-preview.0.31" />
     <PackageReference Include="System.Buffers" Version="4.5.1" />
     <PackageReference Include="System.IO.Pipelines" Version="5.0.1" />
     <PackageReference Include="TaskBuilder.fs" Version="2.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UiProgress\UiProgress.fsproj" />
   </ItemGroup>
 
 </Project>
