@@ -1,16 +1,14 @@
-module UiProgress =
+namespace UiProgress
+
+module Controls = 
 
     open System
-    open System.Globalization
     open System.Text
     open System.Threading
 
-    type DateTime with 
-        static member Since(start) = (-) DateTime.Now start 
 
-    /// <summary> ErrMaxCurrentReached is the error when trying to set current value that exceeds the total value </summary>
-    exception ErrMaxCurrentReached of string
-    let errMaxCurrentReached = ErrMaxCurrentReached "errors: current value is greater total value"
+    type DateTime with 
+        static member Since(start: DateTime) = DateTime.Now - start 
 
     /// <summary> ElapsedStyle instructs how the elapsedTime is displayed </summary> 
     type ElapsedStyle = TotalSecondsStyle | DetailedStyle 
@@ -19,9 +17,13 @@ module UiProgress =
     type BarState = {
             /// <summary> Total of the progress bar </summary> 
             total: int 
-            /// <summary> LeftEnd is character in the left most part of the progress indicator. Defaults to '[' </summary> 
+            /// <summary>
+            /// LeftEnd is character in the left most part of the progress indicator. Defaults to '['
+            /// </summary> 
             leftEnd: char
-            /// <summary> RightEnd is character in the right most part of the progress indicator. Defaults to ']' </summary> 
+            /// <summary>
+            /// RightEnd is character in the right most part of the progress indicator. Defaults to ']'
+            /// </summary> 
             rightEnd: char
             /// <summary> Fill is the character representing completed progress. Defaults to '=' </summary> 
             fill: char
@@ -65,20 +67,29 @@ module UiProgress =
 
     type BuiltinFunc = PercentCompleted | TimeElapsed
 
-    type internal Command =
+    type private BarCommand =
         | SetValue of int 
         | IncrementBy of int * AsyncReplyChannel<bool>
-        | GetCurrent of AsyncReplyChannel<int> 
+        | GetCurrent of AsyncReplyChannel<int>
+        | IsComplete of AsyncReplyChannel<bool> 
         | AppendFunc of DecoratorFunc
         | PrependFunc of DecoratorFunc
         | Append of BuiltinFunc
         | Prepend of BuiltinFunc
-        | ToString of AsyncReplyChannel<string> 
+        | ToString of AsyncReplyChannel<string>
+        | Quit 
 
-    type Bar(?barState: BarState) =
+    /// <summary>
+    /// ErrMaxCurrentReached is the error when trying to set current value that exceeds the total value
+    /// </summary>
+    exception ErrMaxCurrentReached of string
+
+    type Bar(?barState: BarState, ?cancel: CancellationToken) as this =
         let bar = barState |> Option.defaultValue (BarState.CreateDefault())
         
-        let setValue n bar = if n > bar.total then raise errMaxCurrentReached else { bar with current = n }
+        let setValue n bar = if n > bar.total
+                             then raise (ErrMaxCurrentReached "errors: current value is greater total value")
+                             else { bar with current = n }
         
         let incrementBy n bar =
             match bar.current, bar.timeStarted with
@@ -91,6 +102,8 @@ module UiProgress =
                 true, { bar with current = cur + n
                                  timeStarted = ValueSome DateTime.Now
                                  timeElapsed = ValueSome TimeSpan.Zero }
+                
+        let isComplete bar = bar.current = bar.total 
             
         let appendFunc f bar = { bar with BarState.appendFuncs = bar.appendFuncs @ [f] }
         
@@ -143,7 +156,8 @@ module UiProgress =
             
             sb.ToString() 
             
-        let cancel = new CancellationTokenSource() 
+        let cts = new CancellationTokenSource()
+        let token = cancel |> Option.defaultValue cts.Token 
         let agent = MailboxProcessor.Start((fun inbox ->
             let rec loop bar = async {
                 let! msg = inbox.Receive()
@@ -156,6 +170,8 @@ module UiProgress =
                 | GetCurrent ch ->
                     ch.Reply(bar.current)
                     return! loop bar
+                | IsComplete ch ->
+                    ch.Reply(isComplete bar) 
                 | AppendFunc f -> return! bar |> appendFunc f |> loop
                 | PrependFunc f -> return! bar |> prependFunc f |> loop
                 | Append PercentCompleted -> return! bar |> appendFunc completedPercentString |> loop
@@ -163,16 +179,17 @@ module UiProgress =
                 | Prepend PercentCompleted -> return! bar |> prependFunc completedPercentString |> loop
                 | Prepend TimeElapsed -> return! bar |> prependFunc timeElapsedString |> loop
                 | ToString ch -> bar |> toString |> ch.Reply
-                                 return! loop bar 
+                                 return! loop bar
+                | Quit -> return ()
             }
-            loop bar), cancel.Token)
+            loop bar), token)
         
-        new(total: int, ?width: int) =
-            let defaultState = BarState.CreateDefault() 
-            let opts = match width with
-                       | None -> { defaultState with total = total }
-                       | Some w -> { defaultState with total = total; width = w }
-            new Bar(opts)
+        new(total: int, ?width: int, ?cancel: CancellationToken) =
+            let defaultState = BarState.CreateDefault()
+            let bs = match width with
+                     | None -> { defaultState with total = total }
+                     | Some w -> { defaultState with total = total; width = w }
+            if cancel.IsNone then new Bar(bs) else new Bar(bs, cancel.Value)
             
         member _.Increment() =
             let buildMessage channel = IncrementBy(1, channel)
@@ -181,6 +198,8 @@ module UiProgress =
         member _.IncrementBy(n) =
             let buildMessage channel = IncrementBy(n, channel)
             agent.PostAndReply buildMessage
+            
+        member _.IsComplete with get () = agent.PostAndReply IsComplete 
             
         member _.Value
             with get () = agent.PostAndReply GetCurrent
@@ -196,30 +215,16 @@ module UiProgress =
         
         member _.PrependCompleted() = Prepend PercentCompleted |> agent.Post
         
-        member _.PrependElapsed() = Prepend TimeElapsed |> agent.Post 
+        member _.PrependElapsed() = Prepend TimeElapsed |> agent.Post
+        
+        member _.Cancel() = cts.Cancel()
+        
+        member _.Dispose() = (this :> IDisposable).Dispose()
             
         override _.ToString() = agent.PostAndReply ToString 
             
         interface IDisposable with
             member _.Dispose() =
-                cancel.Dispose()
-
-
-open System 
-open UiProgress
-
-let foo (total: int) (seconds: int) =
-    async {
-        let rnd = Random(total * seconds)
-        use b = new Bar(total)
-        b.AppendCompleted()
-        b.PrependElapsed()
-        
-        while b.Value < total do
-            let r = rnd.NextDouble()
-            do! Async.Sleep(r * 1000.0 |> int)
-            let inc = if total - b.Value < 2 then total - b.Value else int(float(total - b.Value) * r)
-            b.IncrementBy(inc) |> ignore
-            printfn $"{b.ToString()}"
-            
-    } |> Async.RunSynchronously
+                agent.Post Quit 
+                (agent :> IDisposable).Dispose() 
+                cts.Dispose()
