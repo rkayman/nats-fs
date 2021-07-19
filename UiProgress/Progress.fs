@@ -10,25 +10,24 @@ module Console =
     /// RefreshInterval in the default time duration to wait for refreshing the output 
     let DefaultRefreshInterval = TimeSpan.FromMilliseconds(33.0) 
 
-    type ProgressState = {
-            /// Pos is the top, leftmost position of the progress bar  
-            pos: struct (int * int) option 
-            /// Width is the width of the progress bars 
-            width: int
-            /// Bars is the collection of progress bars 
-            bars: Bar list 
-            /// RefreshInterval in the time duration to wait for refreshing the output 
-            refreshInterval: TimeSpan
-            /// Ticker is the timer controlling the refresh rate of the progress bar 
-            ticker: Timer option 
-        }
-        with static member CreateDefault() = {
-                                                 pos = None 
-                                                 width = float(Console.WindowWidth) * 0.5 |> int  
-                                                 bars = []
-                                                 refreshInterval = DefaultRefreshInterval
-                                                 ticker = None 
-                                             }
+    type ProgressState =
+        { /// Pos is the top, leftmost position of the progress bar
+          pos: struct (int * int) option 
+          /// Width is the width of the progress bars 
+          width: int
+          /// Bars is the collection of progress bars 
+          bars: Bar list 
+          /// RefreshInterval in the time duration to wait for refreshing the output 
+          refreshInterval: TimeSpan
+          /// Ticker is the timer controlling the refresh rate of the progress bar 
+          ticker: Timer option }
+        
+        static member CreateDefault() =
+            { pos = None
+              width = float(Console.WindowWidth) * 0.5 |> int
+              bars = []
+              refreshInterval = DefaultRefreshInterval
+              ticker = None }
 
     type private ProgressCommand =
         | AddBar of int * AsyncReplyChannel<Bar> 

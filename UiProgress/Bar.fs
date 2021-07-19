@@ -10,59 +10,54 @@ module Controls =
     type DateTime with 
         static member Since(start: DateTime) = DateTime.Now - start 
 
-    /// <summary> ElapsedStyle instructs how the elapsedTime is displayed </summary> 
+    /// ElapsedStyle articulates options for displaying elapsed time 
     type ElapsedStyle = TotalSecondsStyle | DetailedStyle 
 
-    /// <summary> The options used to display the progress bar </summary> 
-    type BarState = {
-            /// <summary> Total of the progress bar </summary> 
-            total: int 
-            /// <summary>
-            /// LeftEnd is character in the left most part of the progress indicator. Defaults to '['
-            /// </summary> 
-            leftEnd: char
-            /// <summary>
-            /// RightEnd is character in the right most part of the progress indicator. Defaults to ']'
-            /// </summary> 
-            rightEnd: char
-            /// <summary> Fill is the character representing completed progress. Defaults to '=' </summary> 
-            fill: char
-            /// <summary> Head is the character that moves when progress is updated.  Defaults to '>' </summary> 
-            head: char
-            /// <summary> Empty is the character that represents the empty progress. Default is '-' </summary> 
-            empty: char
-            /// <summary> Width is the width of the progress bar. Default is 70</summary> 
-            width: int
-            /// <summary> TimeStarted is time progress began </summary>
-            timeStarted: DateTime ValueOption 
-            /// <summary> TimeElapsed is the time elapsed for the progress </summary>
-            timeElapsed: TimeSpan ValueOption 
-            /// <summary> </summary>
-            elapsedStyle: ElapsedStyle 
-            /// <summary> Current is the amount of progress made over elapsed time </summary> 
-            current: int
-            
-            appendFuncs: DecoratorFunc list
-            prependFuncs: DecoratorFunc list 
-        }
-        with static member CreateDefault() = {
-                                                 total        = 100
-                                                 leftEnd      = '['
-                                                 rightEnd     = ']'
-                                                 fill         = '='
-                                                 head         = '>'
-                                                 empty        = '-'
-                                                 width        = 70
-                                                 timeStarted  = ValueNone
-                                                 timeElapsed  = ValueNone
-                                                 elapsedStyle = TotalSecondsStyle 
-                                                 current      = 0
-                                                 
-                                                 appendFuncs  = [] 
-                                                 prependFuncs = [] 
-                                             }
+    /// The options used to display the progress bar 
+    type BarState =
+        { /// Total of the progress bar
+          total: int
+          /// LeftEnd is character in the left most part of the progress indicator. Defaults to '['
+          leftEnd: char
+          /// RightEnd is character in the right most part of the progress indicator. Defaults to ']'
+          rightEnd: char
+          /// Fill is the character representing completed progress. Defaults to '=' 
+          fill: char
+          /// Head is the character that moves when progress is updated.  Defaults to '>' 
+          head: char
+          /// Empty is the character that represents the empty progress. Default is '-' 
+          empty: char
+          /// Width is the width of the progress bar. Default is 70 
+          width: int
+          /// TimeStarted is time progress began
+          timeStarted: DateTime ValueOption 
+          /// TimeElapsed is the time elapsed for the progress
+          timeElapsed: TimeSpan ValueOption 
+          /// ElapsedStyle controls how timeElapsed is displayed
+          elapsedStyle: ElapsedStyle 
+          /// Current is the amount of progress made over elapsed time 
+          current: int
+        
+          appendFuncs: DecoratorFunc list
+          prependFuncs: DecoratorFunc list }
+
+        static member CreateDefault() =
+            { total        = 100
+              leftEnd      = '['
+              rightEnd     = ']'
+              fill         = '='
+              head         = '>'
+              empty        = '-'
+              width        = 70
+              timeStarted  = ValueNone
+              timeElapsed  = ValueNone
+              elapsedStyle = TotalSecondsStyle 
+              current      = 0
+              appendFuncs  = [] 
+              prependFuncs = [] }
+
     and
-        /// <summary> DecoratorFunc is a function that can be prepended and appended to the progress bar </summary>
+        /// DecoratorFunc is a function that can be prepended and appended to the progress bar
         DecoratorFunc = BarState -> string 
 
     type BuiltinFunc = PercentCompleted | TimeElapsed
