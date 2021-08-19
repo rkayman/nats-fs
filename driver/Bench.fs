@@ -4,14 +4,15 @@ module Channels =
     
     open System.Threading
     open System.Threading.Channels
-    open FSharp.Control.Tasks.NonAffine
+    open System.Threading.Tasks
+    open FSharp.Control.Tasks.V2.ContextInsensitive
     
     let inline (!!) (x: ^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)
         
     let inline (!!>) (ch: ChannelWriter<'a>) (item, token: CancellationToken) =
         task {
             return! ch.WriteAsync(item, token)
-        }
+        } :> Task
     
     let inline (!>) (ch: ChannelWriter<'a>) item = (!!>) ch (item, Unchecked.defaultof<CancellationToken>)
         
@@ -40,20 +41,21 @@ module Bench =
             Array.init numPubs (fun x -> count + if x < extra then 1 else 0) 
     
     /// HumanBytes formats bytes as a human readable string
-    let humanBytes (bytes: float) si =
+    let humanBytes si (bytes: ValueType) =
+        let bytes' = bytes |> Convert.ToDouble
         let base', post, pre =
-            if si then 1000, "iB", [| "k"; "M"; "G"; "T"; "P"; "E" |]
-            else 1024, "B", [| "K"; "M"; "G"; "T"; "P"; "E" |]
+            if si then 1024, "iB", [| "K"; "M"; "G"; "T"; "P"; "E" |]
+            else 1000, "B", [| "K"; "M"; "G"; "T"; "P"; "E" |]
         
-        if bytes < float(base') then $"%0.2f{bytes} B"
+        if bytes' < float(base') then $"{bytes':N0} B"
         else
-            let exp = int(log bytes / log (float(base')))
+            let exp = int(log bytes' / log (float(base')))
             let idx = exp - 1
             let units = pre.[idx] + post
-            $"%0.2f{bytes / (pown (float(base'))  exp)} %s{units}" 
+            $"{bytes' / (pown (float(base'))  exp):N2} %s{units}"
 
     /// Format number for pretty printing using thousands and decimal separators 
-    let inline commaFormat n = $"{n:N}"
+    let inline commaFormat n = $"{n:N0}"
         
     /// A Sample for a particular client
     type Sample =
@@ -78,7 +80,7 @@ module Bench =
             
         override this.ToString() =
             let rate = commaFormat this.Rate
-            let throughput = humanBytes this.Throughput false
+            let throughput = humanBytes false this.Throughput
             $"{rate} msgs/sec ~ {throughput}/sec"
     
     module Sample =
@@ -131,24 +133,27 @@ module Bench =
         
         /// AverageRate returns the average of all message rates in the SampleGroup
         member this.AverageRate() =
-            let sum = this.Samples |> Seq.sumBy Sample.getRate
-            let cnt = this.Samples.Count |> int64
-            if cnt = 0L then DivideByZeroException("There must be samples in order to compute the average rate") |> raise
-            sum / cnt
+            if this.Samples.Count = 0 then None
+            else 
+                let sum = this.Samples |> Seq.sumBy Sample.getRate
+                let cnt = this.Samples.Count |> int64
+                sum / cnt |> Some
             
         /// StdDev returns the standard deviation of the message rates in the SampleGroup
         member this.StdDev() =
-            let avg = this.AverageRate() |> float
-            let sum = this.Samples |> Seq.sumBy (fun t -> pown (float(t.Rate) - avg)  2)
-            let var = sum / float(this.Samples.Count)
-            sqrt var 
+            this.AverageRate ()
+            |> Option.map (fun ar ->
+                let avg = float ar
+                let sum = this.Samples |> Seq.sumBy (fun t -> pown (float(t.Rate) - avg) 2)
+                let var = sum / float(this.Samples.Count)
+                sqrt var)
 
         /// Statistics information of the sample group (min, average, max, and standard deviation)
         member this.Statistics() =
             $"min %s{this.MinRate() |> Option.defaultValue 0L |> commaFormat} | \
-              avg %s{this.AverageRate() |> commaFormat} | \
+              avg %s{this.AverageRate() |> Option.defaultValue 0L |> commaFormat} | \
               max %s{this.MaxRate() |> Option.defaultValue 0L |> commaFormat} | \
-              stddev %s{this.StdDev() |> commaFormat} msgs"
+              stddev %s{this.StdDev() |> Option.defaultValue 0.0 |> commaFormat} msgs"
             
     module SampleGroup =
         
@@ -181,10 +186,16 @@ module Bench =
 
             
     let private makeChannel capacity =
-        let opt = BoundedChannelOptions(capacity)
-        opt.SingleWriter <- false
-        opt.SingleReader <- true 
-        Channel.CreateBounded<Sample>(opt)
+        if capacity < 1 then
+            let opt = UnboundedChannelOptions()
+            opt.SingleReader <- true
+            opt.SingleWriter <- false
+            Channel.CreateUnbounded<Sample>(opt)
+        else
+            let opt = BoundedChannelOptions(capacity)
+            opt.SingleWriter <- false
+            opt.SingleReader <- true 
+            Channel.CreateBounded<Sample>(opt)
 
     type private BenchmarkCsv =
         CsvProvider<Sample="#RunID,ClientID,MsgCount,MsgBytes,MsgsPerSec,BytesPerSec,DurationsSecs",
@@ -240,10 +251,9 @@ module Bench =
             this.pubChannel.Writer.Complete()
 
             let addSamples (ch: ChannelReader<_>) (grp: SampleGroup) =
-                for _ = 1 to ch.Count do
-                    match ch.TryRead() with
-                    | false, _ -> ()
-                    | true, s  -> SampleGroup.addSample grp s 
+                let mutable s = Unchecked.defaultof<Sample>
+                while ch.TryRead(&s) do
+                    SampleGroup.addSample grp s 
 
             addSamples this.subChannel.Reader this.Subs
             addSamples this.pubChannel.Reader this.Pubs 
@@ -272,6 +282,7 @@ module Bench =
                 Printf.bprintf buf $"{ident}{hdr} stats: {!grp.Aggregate}\n"
                 grp.Samples
                 |> Seq.iteri (fun i s -> Printf.bprintf buf $"{ident} [%d{i + 1}] {s} (%d{s.JobMessageCount})\n")
+                Printf.bprintf buf $"{ident} {grp.Statistics()}\n"
                 buf
                 
             let buf = StringBuilder(1024)
@@ -290,7 +301,7 @@ module Bench =
 
     module Benchmark =
         
-        let addSample (ch: Channel<Sample>) s =
+        let addSample (ch: Channel<Sample>) (s: Sample) =
             let t = !> (!! ch) s
             if t.Wait(1_000) then () else TimeoutException("Unable to add sample to channel") |> raise
 
