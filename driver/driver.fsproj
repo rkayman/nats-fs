@@ -3,7 +3,13 @@
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <TargetFramework>net5.0</TargetFramework>
+        <RuntimeIdentifier>osx-x64</RuntimeIdentifier>
         <WarnOn>3390;$(WarnOn)</WarnOn>
+        <Configurations>Debug;Release</Configurations>
+        <Platforms>x64</Platforms>
+        <GenerateProgramFile>false</GenerateProgramFile>
+        <SelfContained>false</SelfContained>
+        <PublishSingleFile>false</PublishSingleFile>
     </PropertyGroup>
 
     <ItemGroup>
@@ -18,9 +24,9 @@
 
     <ItemGroup>
       <PackageReference Include="BenchmarkDotNet" Version="0.13.0" />
-      <PackageReference Include="FSharp.Data" Version="4.1.1" />
-      <PackageReference Include="Ply" Version="0.3.1" />
-      <PackageReference Include="System.IO.Pipelines" Version="5.0.1" />
+      <PackageReference Include="FSharp.Data" Version="4.2.0" />
+      <PackageReference Include="System.IO.Pipelines" Version="6.0.0-preview.6.21352.12" />
+      <PackageReference Include="TaskBuilder.fs" Version="2.2.0-alpha" />
     </ItemGroup>
 
 </Project>
