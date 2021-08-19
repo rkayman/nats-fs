@@ -24,7 +24,7 @@ module Console =
         
         static member CreateDefault() =
             { pos = None
-              width = float(Console.WindowWidth) * 0.5 |> int
+              width = float(Console.WindowWidth) * 0.618 |> int
               bars = []
               refreshInterval = DefaultRefreshInterval
               ticker = None }
@@ -44,6 +44,15 @@ module Console =
         let addBar total state = 
             let bar = new Bar(total, state.width) 
             { state with bars = state.bars @ [bar] } 
+
+        let write state =
+            Console.CursorVisible <- false
+            let struct (curX, curY) = state.pos |> Option.defaultWith Console.GetCursorPosition
+            let struct (x, y) = if state.pos.IsNone then (curX, curY) else (curX, curY - 2)
+            Console.SetCursorPosition(x, y)
+            state.bars |> List.iter (printfn "%A")
+            Console.CursorVisible <- true 
+            if state.pos.IsSome then state else { state with pos = Some (curX, curY) }
             
         let newTimer () =
             Some (new Timer(this.TimerCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan))
@@ -58,15 +67,6 @@ module Console =
         let stopTicker state =
             state.ticker |> Option.iter (changeTimer Timeout.InfiniteTimeSpan)
             state
-            
-        let write state =
-            Console.CursorVisible <- false 
-            let struct (curX, curY) = state.pos |> Option.defaultWith Console.GetCursorPosition
-            Console.SetCursorPosition(curX, curY)
-            for bar in state.bars do
-                printfn $"{bar.ToString()}"
-            Console.CursorVisible <- true 
-            if state.pos.IsSome then state else { state with pos = Some (curX, curY) }
             
         let isComplete state =
             state.bars |> List.forall (fun x -> x.IsComplete) 

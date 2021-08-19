@@ -148,7 +148,6 @@ module Controls =
             let insert str = sb.Insert(0, $"{str} ") |> ignore 
             bar.appendFuncs |> List.iter (fun f -> f bar |> Printf.bprintf sb " %s")
             bar.prependFuncs |> List.iter (fun f -> f bar |> insert )
-            
             sb.ToString() 
             
         let cts = new CancellationTokenSource()
