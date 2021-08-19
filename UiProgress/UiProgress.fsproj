@@ -2,8 +2,11 @@
 
     <PropertyGroup>
         <TargetFramework>net5.0</TargetFramework>
+        <RuntimeIdentifier>osx-x64</RuntimeIdentifier>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <WarnOn>3390;$(WarnOn)</WarnOn>
+        <Configurations>Debug;Release</Configurations>
+        <Platforms>x64</Platforms>
     </PropertyGroup>
 
     <ItemGroup>
