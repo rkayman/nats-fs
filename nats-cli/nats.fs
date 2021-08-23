@@ -10,10 +10,49 @@ namespace NATS
     open System.Threading
     open System.Threading.Tasks
     open FSharp.Control.Tasks.V2.ContextInsensitive
+    open FParsec
     open FsToolkit.ErrorHandling
 
     
     module Client =
+        
+        module Parser =
+            
+            type ProtocolMessage =
+                | Info of result: string
+                | Msg of result: (string * string) * int
+                | Payload of result: string
+                | Ping 
+                | Pong 
+                | Ok
+                | Err of msg: string 
+            
+            let INFO = pstring "INFO" .>> spaces1 >>. restOfLine false |>> Info 
+            
+            let isAllowed ch = Char.IsLetterOrDigit(ch) || isAnyOf "_." ch
+            let arg = manySatisfy isAllowed
+            let spcstr = pstring " "
+            
+            let MSG = pstring "MSG" .>> spaces1 .>>. stringsSepBy1 arg spcstr .>>. pint32 .>> newline |>> Msg
+            
+            let Payload numBytes = anyString numBytes .>> newline |>> Payload
+            
+            let PING = pstring "PING" .>> newline >>% Ping
+            
+            let PONG = pstring "PONG" .>> newline >>% Pong
+            
+            let OK = pstring "+OK" .>> newline >>% Ok
+            
+            let ERR = pstring "-ERR" .>> spaces1 >>. restOfLine false .>> newline |>> Err 
+            
+            let protocolMessage = choice [ MSG
+                                           INFO
+                                           PING
+                                           PONG
+                                           OK
+                                           ERR ]
+            
+            let parseMessage = runParserOnString protocolMessage () String.Empty 
         
         module Receiver = 
             
