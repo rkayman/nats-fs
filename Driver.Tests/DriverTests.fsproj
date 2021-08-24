@@ -8,6 +8,8 @@
         <Configurations>Debug;Release</Configurations>
         <Platforms>x64</Platforms>
         <GenerateProgramFile>false</GenerateProgramFile>
+        <SelfContained>false</SelfContained>
+        <PublishSingleFile>false</PublishSingleFile>
     </PropertyGroup>
     
     <ItemGroup>
