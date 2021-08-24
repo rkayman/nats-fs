@@ -52,7 +52,9 @@ namespace NATS
                                            OK
                                            ERR ]
             
-            let parseMessage = runParserOnString protocolMessage () String.Empty 
+            let parseMessage = runParserOnString protocolMessage () String.Empty
+            
+            let parsePayload n = runParserOnString (Payload n) () String.Empty 
         
         module Receiver = 
             
@@ -97,14 +99,15 @@ namespace NATS
             let private getNextNewLinePosition buf = buf.PositionOf(NewLine) |> Option.ofNullable
             
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
-            let rec private processBuffer (buf: ReadOnlySequence<byte>) =
+            let rec private processBuffer (buf: ReadOnlySequence<byte> byref) =
                 match getNextNewLinePosition buf with
                 | None -> buf
                 | Some pos ->
                     let seq = buf.Slice(0, pos)
                     let line = Encoding.UTF8.GetString(&seq)
                     lineFound.Trigger(line)
-                    buf.Slice(buf.GetPosition(1L, pos)) |> processBuffer
+                    buf <- buf.Slice(buf.GetPosition(1L, pos))
+                    processBuffer &buf
 
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>] 
             let read (reader: PipeReader) token =
@@ -112,14 +115,16 @@ namespace NATS
                     let mutable error = null
                     try 
                         try
-                            let buf = ref Unchecked.defaultof<ReadOnlySequence<byte>>
+                            //let buf = ref Unchecked.defaultof<ReadOnlySequence<byte>>
+                            let mutable buf = Unchecked.defaultof<ReadOnlySequence<byte>> 
                             let readMore = ref true
                             while !readMore do
                                 let! result = reader.ReadAsync(token)
                                 readMore := not result.IsCompleted && not result.IsCanceled
                                 if not result.Buffer.IsEmpty then
-                                    buf := processBuffer result.Buffer 
-                                    reader.AdvanceTo((!buf).Start, (!buf).End)
+                                    buf <- result.Buffer
+                                    buf <- processBuffer &buf 
+                                    reader.AdvanceTo(buf.Start, buf.End)
                         with ex -> 
                             error <- ex 
                     finally
