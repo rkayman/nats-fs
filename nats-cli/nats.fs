@@ -90,8 +90,7 @@ namespace NATS
                         writer.Complete(error)
                 }
                 
-            let private lineFound = Event<string>()
-            let Lines = lineFound.Publish
+            let internal lineFound = Event<string>()
             
             let private NewLine = byte('\n')
             
@@ -99,15 +98,14 @@ namespace NATS
             let private getNextNewLinePosition buf = buf.PositionOf(NewLine) |> Option.ofNullable
             
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
-            let rec private processBuffer (buf: ReadOnlySequence<byte> byref) =
+            let rec private processBuffer (buf: ReadOnlySequence<byte>) =
                 match getNextNewLinePosition buf with
                 | None -> buf
                 | Some pos ->
                     let seq = buf.Slice(0, pos)
                     let line = Encoding.UTF8.GetString(&seq)
                     lineFound.Trigger(line)
-                    buf <- buf.Slice(buf.GetPosition(1L, pos))
-                    processBuffer &buf
+                    buf.Slice(buf.GetPosition(1L, pos)) |> processBuffer 
 
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>] 
             let read (reader: PipeReader) token =
@@ -115,15 +113,13 @@ namespace NATS
                     let mutable error = null
                     try 
                         try
-                            //let buf = ref Unchecked.defaultof<ReadOnlySequence<byte>>
                             let mutable buf = Unchecked.defaultof<ReadOnlySequence<byte>> 
                             let readMore = ref true
                             while !readMore do
                                 let! result = reader.ReadAsync(token)
                                 readMore := not result.IsCompleted && not result.IsCanceled
                                 if not result.Buffer.IsEmpty then
-                                    buf <- result.Buffer
-                                    buf <- processBuffer &buf 
+                                    buf <- processBuffer result.Buffer 
                                     reader.AdvanceTo(buf.Start, buf.End)
                         with ex -> 
                             error <- ex 
@@ -155,6 +151,8 @@ namespace NATS
                 do! client.ConnectAsync(server.Host, server.Port, cancel.Token)
                 return client
             }
+
+        let Lines = Receiver.lineFound.Publish
 
         let listen onUrl forSubject cancel =
             task {
