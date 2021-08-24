@@ -19,7 +19,7 @@ module Driver =
     open NATS
     open UiProgress.Console
 
-
+(*
     [<MemoryDiagnoser>]
     type PipeBench() =
         let mutable cancel : CancellationTokenSource = null
@@ -89,19 +89,13 @@ module Driver =
                 Task.WaitAll(task, output)
             with _ -> ()
             
-        [<Benchmark>]
-        member _.RunListenPrime() = 
-            try
-                let task = Client.listen' url "test" cancel.Token
-                Task.WaitAll(task, output)
-            with _ -> ()
-        
+                    
     [<EntryPoint>]
     let main argv =
         BenchmarkRunner.Run<PipeBench>()
         |> printfn "%A"
         0
-
+*)
    
 //    module Bench = 
 //        open System.Threading.Channels
@@ -144,92 +138,91 @@ module Driver =
 //                |> Benchmark.addSample bm.pubChannel 
 //            }
 
-(*            
-        let messagesPerClient numMessages numPubs =
-            if numPubs = 0 || numMessages = 0 then Array.create 0 0
-            else
-                let count = numMessages / numPubs
-                let extra = numMessages % numPubs
-                Array.init numPubs (fun x -> count + if x < extra then 1 else 0)
+
+    let messagesPerClient numMessages numPubs =
+        if numPubs = 0 || numMessages = 0 then Array.create 0 0
+        else
+            let count = numMessages / numPubs
+            let extra = numMessages % numPubs
+            Array.init numPubs (fun x -> count + if x < extra then 1 else 0)
+        
+    let inline processor (logger: string -> unit) (bytes: ReadOnlySequence<byte>) =
+        Encoding.UTF8.GetString(&bytes) |> logger
+
+
+    [<EntryPoint>]
+    let main argv =
+        let expectedArgs = 2
+        if Array.length argv <> expectedArgs then
+            failwith $"{expectedArgs} arguments required: <number of subscribers> <subject on which to listen>"
+
+        let numSub = argv.[0] |> Int32.Parse
+        let subject = argv.[1] 
+
+        let opts = UnboundedChannelOptions()
+        opts.SingleReader <- true
+        let log = Channel.CreateUnbounded<string>(opts)
+
+        let mutable msgCnt = 0
+        let timeFormat = "HH:mm:ss"
+        let logger (ch: ChannelWriter<string>) msg =
+            task {
+                Interlocked.Increment(&msgCnt) |> ignore
+                let msg' = $"[#{msgCnt:D6}] %s{msg}"
+                let rec loop item = 
+                    task {
+                        if ch.TryWrite(item) then return ()
+                        else 
+                            match! ch.WaitToWriteAsync() with
+                            | false -> return ()
+                            | true  ->
+                                if ch.TryWrite(item) then return ()
+                                else return! loop item 
+                    }
+                return! loop msg' 
+            } :> Task
+                            
+        let printer (ch: ChannelReader<string>) token =
+            task {
+                let msg = ref Unchecked.defaultof<string>
+                let mutable more = true
+                while more do
+                    match! ch.WaitToReadAsync(token) with
+                    | false ->
+                        more <- false 
+                    | true  ->
+                        while ch.TryRead(msg) do eprintfn $"{!msg}"
+            } :> Task
+
+        use cts = new CancellationTokenSource()
+
+        try
+            try 
+                use cancel = Console.CancelKeyPress.Subscribe(fun obs ->
+                    obs.Cancel <- true
+                    cts.Cancel())
+
+                eprintfn $"{DateTime.Now.ToString(timeFormat)} Subscribing on {subject}"
+                use sub = Client.Lines.Subscribe(fun line -> (logger log.Writer line).Wait())
+                let server = Uri("nats://localhost")
+                let client = Client.listen server subject (*processor'*) cts.Token
+
+                let output = printer log.Reader cts.Token
+                Task.WhenAll(client, output).Wait()
                 
-        let inline processor (logger: string -> unit) (bytes: ReadOnlySequence<byte>) =
-            Encoding.UTF8.GetString(&bytes) |> logger
-            
-
-        [<EntryPoint>]
-        let main argv =
-            let expectedArgs = 2
-            if Array.length argv <> expectedArgs then
-                failwith $"{expectedArgs} arguments required: <number of subscribers> <subject on which to listen>"
-
-            let numSub = argv.[0] |> Int32.Parse
-            let subject = argv.[1] 
-            
-            let opts = UnboundedChannelOptions()
-            opts.SingleReader <- true
-            let log = Channel.CreateUnbounded<string>(opts)
-
-            let mutable msgCnt = 0
-            let timeFormat = "HH:mm:ss"
-            let logger (ch: ChannelWriter<string>) msg =
-                task {
-                    Interlocked.Increment(&msgCnt) |> ignore
-                    let msg' = $"[#{msgCnt:D6}] %s{msg}"
-                    let rec loop item = 
-                        task {
-                            if ch.TryWrite(item) then return ()
-                            else 
-                                match! ch.WaitToWriteAsync() with
-                                | false -> return ()
-                                | true  ->
-                                    if ch.TryWrite(item) then return ()
-                                    else return! loop item 
-                        }
-                    return! loop msg' 
-                } :> Task
-                                
-            let printer (ch: ChannelReader<string>) token =
-                task {
-                    let msg = ref Unchecked.defaultof<string>
-                    let mutable more = true
-                    while more do
-                        match! ch.WaitToReadAsync(token) with
-                        | false ->
-                            more <- false 
-                        | true  ->
-                            while ch.TryRead(msg) do eprintfn $"{!msg}"
-                } :> Task
-            
-            use cts = new CancellationTokenSource()
-
-            try
-                try 
-                    use cancel = Console.CancelKeyPress.Subscribe(fun obs ->
-                        obs.Cancel <- true
-                        cts.Cancel())
-
-                    eprintfn $"{DateTime.Now.ToString(timeFormat)} Subscribing on {subject}"
-                    use sub = Client.Lines.Subscribe(fun line -> (logger log.Writer line).Wait())
-                    let server = Uri("nats://localhost")
-                    let client = Client.listen server subject (*processor'*) cts.Token
-
-                    let output = printer log.Reader cts.Token
-                    Task.WhenAll(client, output).Wait()
-                    
-                with
-                | :? AggregateException as ae ->
-                    match ae.InnerException with
-                    | :? TaskCanceledException -> ()
-                    | ex -> eprintfn $"{ex.ToString()}"
+            with
+            | :? AggregateException as ae ->
+                match ae.InnerException with
+                | :? TaskCanceledException -> ()
                 | ex -> eprintfn $"{ex.ToString()}"
+            | ex -> eprintfn $"{ex.ToString()}"
 
-            finally
-                log.Writer.Complete()
+        finally
+            log.Writer.Complete()
 
-            use dumpCancel = new CancellationTokenSource(30_000)
-            let dumpTask = printer log.Reader dumpCancel.Token
-            dumpTask.Wait()
-            
-            printfn ""
-            0
-*)
+        use dumpCancel = new CancellationTokenSource(30_000)
+        let dumpTask = printer log.Reader dumpCancel.Token
+        dumpTask.Wait()
+
+        printfn ""
+        0
