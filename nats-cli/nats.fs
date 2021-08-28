@@ -19,44 +19,51 @@ namespace NATS
         module Parser =
             
             type ProtocolMessage =
-                | Info of result: string
-                | Msg of result: (string * string) * int
-                | Payload of result: string
-                | Ping 
-                | Pong 
-                | Ok
-                | Err of msg: string 
+                | INFO of result: string
+                | MSG of result: struct (string * string * string option * int)
+                | MSGP of payload: string
+                | PING 
+                | PONG 
+                | OK
+                | ERR of msg: string
+                
+            type private MsgArgs =
+                | Short of int
+                | Long of string * int 
             
-            let INFO = pstring "INFO" .>> spaces1 >>. restOfLine false |>> Info 
+            let private INFO = pstring "INFO" .>> spaces1 >>. restOfLine false .>> newline |>> INFO 
             
-            let isAllowed ch = Char.IsLetterOrDigit(ch) || isAnyOf "_." ch
-            let arg = manySatisfy isAllowed
-            let spcstr = pstring " "
+            let private isAllowed ch = Char.IsLetterOrDigit(ch) || isAnyOf "_." ch
+            let private arg = many1Satisfy isAllowed
+            let private subject = arg .>> spaces1 
+            let private sid = arg .>> spaces1 
+            let private replyTo = arg .>> spaces1 
+            let private numBytes = pint32 
+            let private endMsg = (numBytes |>> Short) <|> (replyTo .>>. numBytes |>> Long)
+            let private toMSG ((subj, sid), args) =
+                match args with
+                | Short bytes -> MSG struct (subj, sid, None, bytes)
+                | Long (reply, bytes) -> MSG struct (subj, sid, Some reply, bytes) 
             
-            let MSG = pstring "MSG" .>> spaces1 .>>. stringsSepBy1 arg spcstr .>>. pint32 .>> newline |>> Msg
+            let private MSG = pstring "MSG" .>> spaces1 >>. subject .>>. sid .>>. endMsg .>> newline |>> toMSG 
             
-            let Payload numBytes = anyString numBytes .>> newline |>> Payload
+            let private Payload numBytes = anyString numBytes .>> newline |>> MSGP
             
-            let PING = pstring "PING" .>> newline >>% Ping
+            let private PING = pstring "PING" .>> newline >>% PING
             
-            let PONG = pstring "PONG" .>> newline >>% Pong
+            let private PONG = pstring "PONG" .>> newline >>% PONG 
             
-            let OK = pstring "+OK" .>> newline >>% Ok
+            let private OK = pstring "+OK" .>> newline >>% OK 
             
-            let ERR = pstring "-ERR" .>> spaces1 >>. restOfLine false .>> newline |>> Err 
+            let private ERR = pstring "-ERR" .>> spaces1 >>. restOfLine false .>> newline |>> ERR 
             
-            let protocolMessage = choice [ MSG
-                                           INFO
-                                           PING
-                                           PONG
-                                           OK
-                                           ERR ]
+            let private protocolMessage = choice [ MSG; INFO; PING; PONG; OK; ERR ]
             
             let parseMessage = runParserOnString protocolMessage () String.Empty
             
             let parsePayload n = runParserOnString (Payload n) () String.Empty 
         
-        module Receiver = 
+        module Receiver =
             
             let subscribe (stream: Stream) subject token =
                 task {
@@ -73,15 +80,15 @@ namespace NATS
                     let mutable error = null
                     try 
                         try
-                            let writeMore = ref true
-                            while !writeMore do 
+                            let mutable writeMore = true
+                            while writeMore do 
                                 let buffer = writer.GetMemory(1)
                                 let! bytesRead = stream.ReadAsync(buffer, token)
-                                writeMore := bytesRead <> 0
-                                if ! writeMore then
+                                writeMore <- bytesRead <> 0
+                                if writeMore then
                                     writer.Advance(bytesRead)
                                     let! result = writer.FlushAsync(token)
-                                    writeMore := not result.IsCompleted && not result.IsCompleted
+                                    writeMore <- not result.IsCompleted && not result.IsCompleted
                             
                         with ex ->
                             error <- ex
@@ -89,13 +96,13 @@ namespace NATS
                     finally
                         writer.Complete(error)
                 }
-                
-            let internal lineFound = Event<string>()
             
             let private NewLine = byte('\n')
             
             [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             let private getNextNewLinePosition buf = buf.PositionOf(NewLine) |> Option.ofNullable
+                
+            let internal lineFound = Event<string>()
             
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
             let rec private processBuffer (buf: ReadOnlySequence<byte>) =
@@ -105,7 +112,7 @@ namespace NATS
                     let seq = buf.Slice(0, pos)
                     let line = Encoding.UTF8.GetString(&seq)
                     lineFound.Trigger(line)
-                    buf.Slice(buf.GetPosition(1L, pos)) |> processBuffer 
+                    buf.Slice(buf.GetPosition(1L, pos)) |> processBuffer
 
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>] 
             let read (reader: PipeReader) token =
@@ -114,13 +121,107 @@ namespace NATS
                     try 
                         try
                             let mutable buf = Unchecked.defaultof<ReadOnlySequence<byte>> 
-                            let readMore = ref true
-                            while !readMore do
+                            let mutable readMore = true
+                            while readMore do
                                 let! result = reader.ReadAsync(token)
-                                readMore := not result.IsCompleted && not result.IsCanceled
+                                readMore <- not result.IsCompleted && not result.IsCanceled
                                 if not result.Buffer.IsEmpty then
                                     buf <- processBuffer result.Buffer 
                                     reader.AdvanceTo(buf.Start, buf.End)
+                        with ex -> 
+                            error <- ex 
+                    finally
+                        reader.Complete(error)
+                } :> Task
+            
+            type MsgDetails =
+                { subject: string 
+                  sid: string 
+                  replyTo: string option 
+                  numBytes: int 
+                  payload: string }
+            
+            [<Struct>] 
+            type NatsMessage =
+                | Info of json: string
+                | Msg of MsgDetails
+                | Ping
+                | Pong
+                | Ok
+                | Error of message: string
+                
+            with
+                static member TryCreate(protocolMessages) =
+                    match protocolMessages with
+                    | [] -> invalidOp "No NATS protocol messages to process."
+                    | x::[] ->
+                        match x with
+                        | Parser.INFO json -> Info json |> Result.Ok
+                        | Parser.PING      -> Ping |> Result.Ok
+                        | Parser.PONG      -> Pong |> Result.Ok
+                        | Parser.OK        -> Ok |> Result.Ok
+                        | Parser.ERR msg   -> Error msg |> Result.Ok
+                        | _                -> Result.Error "Received one protocol message, but expected two protocol messages"
+                    | x::y::[] ->
+                        match x, y with
+                        | Parser.MSGP p, Parser.MSG (subj, id, reply, n) ->
+                            { subject = subj
+                              sid = id
+                              replyTo = reply
+                              numBytes = n
+                              payload = p }
+                            |> Msg |> Result.Ok
+                        | _ ->
+                            Result.Error "Unknown NATS protocol messages found."
+                    | _ ->
+                        Result.Error "Unexpected number (i.e. more than 2) NATS protocol messages found."
+            
+            let internal messageFound = Event<NatsMessage>()
+                
+            [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
+            let private parseNextMessage (buf: ReadOnlySequence<byte>) parser =
+                let rec processBuffer pmsgs pf buf =
+                    match getNextNewLinePosition buf with
+                    | None     -> buf, pf 
+                    | Some pos ->
+                        let loop p = buf.Slice(buf.GetPosition(1L, p)) |> processBuffer [] Parser.parseMessage 
+                        let seq = buf.Slice(0, pos)
+                        let line = Encoding.UTF8.GetString(&seq)
+                        match pf line with
+                        | Success (res, _, _) ->
+                            match res with
+                            | Parser.MSG (_, _, _, bytes) ->
+                                buf.Slice(buf.GetPosition(1L, pos))
+                                |> processBuffer [res] (Parser.parsePayload bytes)
+                            | Parser.MSGP _ ->
+                                NatsMessage.TryCreate(res::pmsgs)
+                                |> Result.either messageFound.Trigger (fun t -> eprintfn $"[WARN] %s{t}") 
+                                loop pos 
+                            | _ ->
+                                NatsMessage.TryCreate([res])
+                                |> Result.either messageFound.Trigger (fun t -> eprintfn $"[WARN] %s{t}") 
+                                loop pos 
+                        | Failure (errStr, _, _) ->
+                            eprintfn $"[WARN] %s{errStr}"
+                            loop pos
+                processBuffer [] parser buf 
+
+            [<MethodImpl(MethodImplOptions.AggressiveOptimization)>] 
+            let readMessages (reader: PipeReader) token =
+                task {
+                    let mutable error = null
+                    try 
+                        try
+                            let mutable buf = Unchecked.defaultof<ReadOnlySequence<byte>>
+                            let mutable parser = Parser.parseMessage
+                            let mutable foo = (Unchecked.defaultof<ReadOnlySequence<byte>>, Parser.parseMessage)
+                            let mutable readMore = true
+                            while readMore do
+                                let! result = reader.ReadAsync(token)
+                                readMore <- not result.IsCompleted && not result.IsCanceled
+                                if not result.Buffer.IsEmpty then
+                                    foo <- parseNextMessage result.Buffer (snd foo) 
+                                    reader.AdvanceTo((fst foo).Start, (fst foo).End)
                         with ex -> 
                             error <- ex 
                     finally
@@ -153,6 +254,7 @@ namespace NATS
             }
 
         let Lines = Receiver.lineFound.Publish
+        let Messages = Receiver.messageFound.Publish
 
         let listen onUrl forSubject cancel =
             task {
@@ -167,7 +269,8 @@ namespace NATS
                     
                     do! Receiver.subscribe stream forSubject cancel
                     let outputTask = Receiver.write stream receivePipe.Writer cancel
-                    let inputTask  = Receiver.read receivePipe.Reader cancel 
+                    //let inputTask  = Receiver.read receivePipe.Reader cancel
+                    let inputTask = Receiver.readMessages receivePipe.Reader cancel 
                     
                     do! Task.WhenAll(outputTask, inputTask)
                     
