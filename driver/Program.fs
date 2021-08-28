@@ -7,16 +7,19 @@ module Driver =
     open System.Collections.Concurrent
     open System.IO.Pipelines
     open System.Net.Sockets
+    open System.Runtime.CompilerServices
     open System.Text
     open System.Threading
     open System.Threading.Channels
     open System.Threading.Tasks
-    open Aspir.Bench
+    open FSharp.Control.Tasks.V2.ContextInsensitive
     open BenchmarkDotNet.Attributes
     open BenchmarkDotNet.Running
-    open FSharp.Control.Tasks.V2.ContextInsensitive 
+    open Aspir.Bench
+    
 
     open NATS
+    open Utilities.UiLive
     open UiProgress.Console
 
 (*
@@ -146,10 +149,19 @@ module Driver =
             let extra = numMessages % numPubs
             Array.init numPubs (fun x -> count + if x < extra then 1 else 0)
         
-    let inline processor (logger: string -> unit) (bytes: ReadOnlySequence<byte>) =
-        Encoding.UTF8.GetString(&bytes) |> logger
-
-
+    let mutable private msgCnt = 0
+    
+    [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
+    let logMessage (writer: Writer) msg =
+        match msg with
+        | Client.Receiver.NatsMessage.Info json    -> $"[INFO] %s{json}"
+        | Client.Receiver.NatsMessage.Error errStr -> $"[ERROR] %s{errStr}"
+        | Client.Receiver.NatsMessage.Msg details  -> 
+            let cnt = Interlocked.Increment(&msgCnt)
+            $"[#{cnt}] Received on \"%s{details.subject}\"\n%s{details.payload}\n"
+        | x -> $"[{x}]"
+        |> writer.Write
+    
     [<EntryPoint>]
     let main argv =
         let expectedArgs = 2
@@ -159,56 +171,23 @@ module Driver =
         let numSub = argv.[0] |> Int32.Parse
         let subject = argv.[1] 
 
-        let opts = UnboundedChannelOptions()
-        opts.SingleReader <- true
-        let log = Channel.CreateUnbounded<string>(opts)
-
-        let mutable msgCnt = 0
-        let timeFormat = "HH:mm:ss"
-        let logger (ch: ChannelWriter<string>) msg =
-            task {
-                Interlocked.Increment(&msgCnt) |> ignore
-                let msg' = $"[#{msgCnt:D6}] %s{msg}"
-                let rec loop item = 
-                    task {
-                        if ch.TryWrite(item) then return ()
-                        else 
-                            match! ch.WaitToWriteAsync() with
-                            | false -> return ()
-                            | true  ->
-                                if ch.TryWrite(item) then return ()
-                                else return! loop item 
-                    }
-                return! loop msg' 
-            } :> Task
-                            
-        let printer (ch: ChannelReader<string>) token =
-            task {
-                let msg = ref Unchecked.defaultof<string>
-                let mutable more = true
-                while more do
-                    match! ch.WaitToReadAsync(token) with
-                    | false ->
-                        more <- false 
-                    | true  ->
-                        while ch.TryRead(msg) do eprintfn $"{!msg}"
-            } :> Task
-
         use cts = new CancellationTokenSource()
+        use writer = new Writer(cancel = cts.Token)
+        writer.Start()
+
+        use cancel = Console.CancelKeyPress.Subscribe(fun obs ->
+            obs.Cancel <- false
+            cts.Cancel())
 
         try
             try 
-                use cancel = Console.CancelKeyPress.Subscribe(fun obs ->
-                    obs.Cancel <- true
-                    cts.Cancel())
-
+                let timeFormat = "HH:mm:ss"
                 eprintfn $"{DateTime.Now.ToString(timeFormat)} Subscribing on {subject}"
-                use sub = Client.Lines.Subscribe(fun line -> (logger log.Writer line).Wait())
+                use sub = Client.Messages.Subscribe(logMessage writer)
                 let server = Uri("nats://localhost")
-                let client = Client.listen server subject (*processor'*) cts.Token
+                let client = Client.listen server subject cts.Token
 
-                let output = printer log.Reader cts.Token
-                Task.WhenAll(client, output).Wait()
+                Task.WhenAll(client).Wait()
                 
             with
             | :? AggregateException as ae ->
@@ -218,11 +197,8 @@ module Driver =
             | ex -> eprintfn $"{ex.ToString()}"
 
         finally
-            log.Writer.Complete()
+            writer.Flush()
+            writer.Stop()
+            cancel.Dispose() 
 
-        use dumpCancel = new CancellationTokenSource(30_000)
-        let dumpTask = printer log.Reader dumpCancel.Token
-        dumpTask.Wait()
-
-        printfn ""
         0
