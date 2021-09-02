@@ -23,6 +23,9 @@
     <PropertyGroup Condition="'$(IsLinux)'=='true'">
         <DefineConstants>Linux</DefineConstants>
     </PropertyGroup>
+    <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+      <Tailcalls>true</Tailcalls>
+    </PropertyGroup>
     
     <ItemGroup>
         <Compile Include="UiLive.fs" />
@@ -36,10 +39,12 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="BenchmarkDotNet" Version="0.13.0" />
-      <PackageReference Include="FSharp.Data" Version="4.2.0" />
-      <PackageReference Include="System.IO.Pipelines" Version="6.0.0-preview.6.21352.12" />
-      <PackageReference Include="TaskBuilder.fs" Version="2.2.0-alpha" />
+      <PackageReference Include="BenchmarkDotNet" Version="0.13.1" />
+      <PackageReference Include="FSharp.Control.Reactive" Version="5.0.2" />
+      <PackageReference Include="FSharp.Data" Version="4.2.2" />
+      <PackageReference Include="Ply" Version="0.3.1" />
+      <PackageReference Include="System.IO.Pipelines" Version="6.0.0-preview.7.21377.19" />
+      <PackageReference Update="FSharp.Core" Version="5.0.2" />
     </ItemGroup>
 
 </Project>
