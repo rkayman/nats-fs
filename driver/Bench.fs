@@ -5,19 +5,20 @@ module Channels =
     open System.Threading
     open System.Threading.Channels
     open System.Threading.Tasks
-    open FSharp.Control.Tasks.V2.ContextInsensitive
+    open FSharp.Control.Tasks.NonAffine
+    open FSharp.Control.Tasks.NonAffine.Unsafe
     
     let inline (!!) (x: ^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)
         
     let inline (!!>) (ch: ChannelWriter<'a>) (item, token: CancellationToken) =
-        task {
+        uunitVtask {
             return! ch.WriteAsync(item, token)
-        } :> Task
+        }
     
     let inline (!>) (ch: ChannelWriter<'a>) item = (!!>) ch (item, Unchecked.defaultof<CancellationToken>)
         
     let inline (!!<) (ch: ChannelReader<'a>) (token: CancellationToken) =
-        task {
+        uvtask {
             return! ch.ReadAsync(token)
         }
         
@@ -303,7 +304,7 @@ module Bench =
         
         let addSample (ch: Channel<Sample>) (s: Sample) =
             let t = !> (!! ch) s
-            if t.Wait(1_000) then () else TimeoutException("Unable to add sample to channel") |> raise
+            if t.AsTask().Wait(1_000) then () else TimeoutException("Unable to add sample to channel") |> raise
 
     type Benchmark with 
             

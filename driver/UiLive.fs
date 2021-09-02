@@ -9,8 +9,6 @@ module Utilities =
 
     module UiLive =
 
-        open System.Runtime.InteropServices
-
         /// RefreshInterval in the default time duration to wait for refreshing the output 
         let DefaultRefreshInterval = TimeSpan.FromMilliseconds(12.5) 
 
