@@ -3,103 +3,19 @@
 module Driver =
 
     open System
-    open System.Buffers
-    open System.Collections.Concurrent
-    open System.IO.Pipelines
-    open System.Net.Sockets
     open System.Runtime.CompilerServices
-    open System.Text
     open System.Threading
-    open System.Threading.Channels
     open System.Threading.Tasks
-    open FSharp.Control.Tasks.V2.ContextInsensitive
-    open BenchmarkDotNet.Attributes
-    open BenchmarkDotNet.Running
+    open FSharp.Control.Reactive.Observable
+    open FSharp.Control.Reactive.Scheduler
     open Aspir.Bench
     
 
     open NATS
+    open NATS.Client.Receiver
     open Utilities.UiLive
     open UiProgress.Console
 
-(*
-    [<MemoryDiagnoser>]
-    type PipeBench() =
-        let mutable cancel : CancellationTokenSource = null
-        let mutable isFirstTime = true
-            
-        let mutable output = Task.CompletedTask 
-        let mutable log = null
-        let mutable sub = null
-        let url = Uri(@"nats://localhost:4222")
-
-        let mutable msgCnt = 0
-        let logger (ch: ChannelWriter<string>) msg =
-            task {
-                Interlocked.Increment(&msgCnt) |> ignore
-                let msg' = $"[#{msgCnt:D6}] %s{msg}"
-                let rec loop item = 
-                    task {
-                        if ch.TryWrite(item) then return ()
-                        else 
-                            match! ch.WaitToWriteAsync() with
-                            | false -> return ()
-                            | true  ->
-                                if ch.TryWrite(item) then return ()
-                                else return! loop item 
-                    }
-                return! loop msg' 
-            } :> Task
-                            
-        let printer (ch: ChannelReader<string>) token =
-            task {
-                let msg = ref Unchecked.defaultof<string>
-                let mutable more = true
-                while more do
-                    match! ch.WaitToReadAsync(token) with
-                    | false ->
-                        more <- false 
-                    | true  ->
-                        while ch.TryRead(msg) do ()  //eprintfn $"{!msg}"
-            } :> Task
-
-        
-        [<GlobalSetup>]
-        member _.Setup() =
-            let opts = UnboundedChannelOptions()
-            opts.SingleReader <- true
-            log <- Channel.CreateUnbounded<string>(opts)
-            sub <- Client.Lines.Subscribe(fun line -> (logger log.Writer line).Wait())
-            
-        [<GlobalCleanup>]
-        member _.Cleanup() =
-            sub.Dispose()
-            
-        [<IterationSetup>]
-        member _.IterSetup() =
-            if not isFirstTime then cancel.Dispose() 
-            cancel <- new CancellationTokenSource(TimeSpan.FromSeconds(30.))
-            if isFirstTime then isFirstTime <- false
-            try
-                output <- printer log.Reader cancel.Token
-            with _ -> ()
-            
-            
-        [<Benchmark(Baseline=true)>]
-        member _.RunListen() =
-            try
-                let task = Client.listen url "test" cancel.Token
-                Task.WaitAll(task, output)
-            with _ -> ()
-            
-                    
-    [<EntryPoint>]
-    let main argv =
-        BenchmarkRunner.Run<PipeBench>()
-        |> printfn "%A"
-        0
-*)
-   
 //    module Bench = 
 //        open System.Threading.Channels
 //        open Aspir.Channels
@@ -141,24 +57,43 @@ module Driver =
 //                |> Benchmark.addSample bm.pubChannel 
 //            }
 
-
-    let messagesPerClient numMessages numPubs =
-        if numPubs = 0 || numMessages = 0 then Array.create 0 0
-        else
-            let count = numMessages / numPubs
-            let extra = numMessages % numPubs
-            Array.init numPubs (fun x -> count + if x < extra then 1 else 0)
+//    let messagesPerClient numMessages numPubs =
+//        if numPubs = 0 || numMessages = 0 then Array.create 0 0
+//        else
+//            let count = numMessages / numPubs
+//            let extra = numMessages % numPubs
+//            Array.init numPubs (fun x -> count + if x < extra then 1 else 0)
         
+    [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
+    let logAgent (writer: Writer) = MailboxProcessor.Start (fun inbox ->
+        let rec loop (w: Writer) cnt = async {
+            match! inbox.Receive() with
+            | NatsMessage.Info json ->
+                w.Write($"[INFO] %s{json}")
+                return! loop w cnt 
+            | NatsMessage.Error err ->
+                w.Write($"[ERROR] %s{err}")
+                return! loop w cnt 
+            | NatsMessage.Msg details ->
+                w.Write($"[#{cnt}] Received on \"%s{details.subject}\"\n%s{details.payload}\n")
+                return! loop w (cnt + 1)
+            | x ->
+                w.Write($"[{x}]")
+                return! loop w cnt 
+        }
+        loop writer 1)
+    
+    let inline logMsg (agent: MailboxProcessor<NatsMessage>) msg = agent.Post(msg)
+    
     let mutable private msgCnt = 0
     
     [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
     let logMessage (writer: Writer) msg =
         match msg with
-        | Client.Receiver.NatsMessage.Info json    -> $"[INFO] %s{json}"
-        | Client.Receiver.NatsMessage.Error errStr -> $"[ERROR] %s{errStr}"
-        | Client.Receiver.NatsMessage.Msg details  -> 
-            let cnt = Interlocked.Increment(&msgCnt)
-            $"[#{cnt}] Received on \"%s{details.subject}\"\n%s{details.payload}\n"
+        | NatsMessage.Info json    -> $"[INFO] %s{json}"
+        | NatsMessage.Error errStr -> $"[ERROR] %s{errStr}"
+        | NatsMessage.Msg details  -> 
+            $"[#{Interlocked.Increment(&msgCnt)}] Received on \"%s{details.subject}\"\n%s{details.payload}\n"
         | x -> $"[{x}]"
         |> writer.Write
     
@@ -175,9 +110,8 @@ module Driver =
         use writer = new Writer(cancel = cts.Token)
         writer.Start()
 
-        use cancel = Console.CancelKeyPress.Subscribe(fun obs ->
-            obs.Cancel <- false
-            cts.Cancel())
+        use cancel = Console.CancelKeyPress.Subscribe(fun _ -> cts.Cancel())
+        use logger = logAgent writer 
 
         try
             try 
@@ -187,7 +121,7 @@ module Driver =
                 let server = Uri("nats://localhost")
                 let client = Client.listen server subject cts.Token
 
-                Task.WhenAll(client).Wait()
+                Task.WhenAll(client.AsTask()).Wait()
                 
             with
             | :? AggregateException as ae ->
@@ -199,6 +133,6 @@ module Driver =
         finally
             writer.Flush()
             writer.Stop()
-            cancel.Dispose() 
+            cancel.Dispose()
 
         0
