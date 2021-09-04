@@ -56,9 +56,18 @@ namespace NATS
             
             let internal ERR = pstring "-ERR" .>> spaces1 >>. restOfLine false .>> newline |>> ERR 
             
-            let protocolMessage = choice [ MSG; INFO; PING; PONG; OK; ERR ]
+            let protocolMessage = choiceL [ attempt MSG
+                                            attempt INFO
+                                            attempt PING
+                                            attempt PONG
+                                            attempt OK
+                                            attempt ERR ] "Unrecognized NATS protocol message"
             
-            let parseMessage = runParserOnString protocolMessage () String.Empty
+            let parseSingle = runParserOnString protocolMessage () String.Empty
+            
+            let manyProtocolMessages = many protocolMessage
+            
+            let parseMany = runParserOnString manyProtocolMessages () String.Empty 
         
         module Receiver =
             
@@ -121,7 +130,17 @@ namespace NATS
                     | Parser.ERR msg   -> Error msg |> Result.Ok
                     | Parser.MSG (s, id, r, n, p) ->
                         { subject = s; sid = id; replyTo = r; numBytes = n; payload = p }
-                        |> Msg |> Result.Ok 
+                        |> Msg |> Result.Ok
+                static member Create(protocolMessage) =
+                    match protocolMessage with
+                    | Parser.INFO json -> Info json 
+                    | Parser.PING      -> Ping 
+                    | Parser.PONG      -> Pong 
+                    | Parser.OK        -> Ok 
+                    | Parser.ERR msg   -> Error msg 
+                    | Parser.MSG (s, id, r, n, p) ->
+                        { subject = s; sid = id; replyTo = r; numBytes = n; payload = p }
+                        |> Msg 
             
             [<Literal>]
             let internal NewLine = 10uy
@@ -129,41 +148,21 @@ namespace NATS
             let internal messageFound = Event<NatsMessage>()
                     
             exception NATSException of string
+
+            [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
+            let triggerMessage = NatsMessage.Create >> messageFound.Trigger
             
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
-            let internal findMessages (buffer: ReadOnlySequence<byte>) =
-                let reader = SequenceReader(buffer)
-                let mutable carry = StringBuilder()
-                let mutable line = String.Empty
-                let mutable str = String.Empty
-                let mutable byteSpan = ReadOnlySpan<byte>()
-                let mutable isMSG = false 
-                let mutable readMore = true
-                while readMore do
-                    match reader.TryReadTo(&byteSpan, NewLine, true) with
-                    | false ->
-                        if isMSG then reader.Rewind(int64 carry.Length + 1L)
-                        readMore <- false
-                    | true  ->
-                        line <- Encoding.UTF8.GetString(byteSpan)
-                        str <- if isMSG then
-                                   carry.Append(line.AsSpan()).ToString()
-                               else
-                                   line 
-                        match Parser.parseMessage str with
-                        | Failure (errStr, _, _) when isMSG ->
-                            NATSException($"Invalid NATS message found.  NATS MSG could not be parsed.\n{errStr}")
-                            |> raise
-                        | Failure _ ->
-                            isMSG <- true 
-                            carry <- carry.Append(str) 
-                        | Success (msg, _, _) ->
-                            NatsMessage.TryCreate(msg)
-                            |> Result.either messageFound.Trigger (fun t -> eprintfn $"[WARN] %s{t}")
-                            carry <- carry.Clear()
-                            isMSG <- false
-
-                reader.Position
+            let internal parseMany (buffer: ReadOnlySequence<byte>) =
+                let str = Encoding.UTF8.GetString(&buffer)
+                match Parser.parseMany str with
+                | Failure (errStr, _, _) ->
+                    NATSException $"Invalid NATS message(s) found.  NATS stream could not be parsed.\n{errStr}"
+                    |> raise 
+                | Success (xs, _, pos) ->
+                    xs |> Seq.iter triggerMessage
+                    let pos = buffer.GetPosition(pos.Index)
+                    pos 
             
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>] 
             let read (reader: PipeReader) token =
@@ -176,7 +175,8 @@ namespace NATS
                                 let! result = reader.ReadAsync(token)
                                 readMore <- not result.IsCompleted && not result.IsCanceled
                                 if not result.Buffer.IsEmpty then
-                                    let pos = findMessages result.Buffer
+                                    //let pos = findMessages result.Buffer
+                                    let pos = parseMany result.Buffer 
                                     reader.AdvanceTo(pos, result.Buffer.End)
                         with ex -> 
                             error <- ex 
