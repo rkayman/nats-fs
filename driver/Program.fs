@@ -35,6 +35,17 @@ module Driver =
         let writer = new Writer(cancel = cts.Token)
         writer.Start()
         
+        let body _ state message =
+            vtask {
+                match message with
+                | Observed msg ->
+                    let st = Option.get state.actorState
+                    let payload = Encoding.UTF8.GetString(msg.Data)
+                    st.out.Write $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"  
+                    return state
+                | _ -> return state 
+            }
+            
         let error _ state message err =
             let st = Option.get state.actorState
             st.out.Write $"[ERROR] (msg='%A{message}')\n[DETAILS] %A{err}\n"
@@ -43,18 +54,6 @@ module Driver =
         use sub = subscribe {
             withConnection conn
             topic subject
-
-            let body _ state message =
-                vtask {
-                    match message with
-                    | Observed msg ->
-                        let st = Option.get state.actorState
-                        let payload = Encoding.UTF8.GetString(msg.Data)
-                        st.out.Write $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"  
-                        return state
-                    | _ -> return state 
-                }
-                
             messageHandler body
             errorHandler error
             actorState (Some { cnt = 0; out = writer }) 
