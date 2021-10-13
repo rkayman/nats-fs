@@ -40,11 +40,14 @@
 
     <ItemGroup>
       <PackageReference Include="BenchmarkDotNet" Version="0.13.1" />
-      <PackageReference Include="FSharp.Control.Reactive" Version="5.0.2" />
-      <PackageReference Include="FSharp.Data" Version="4.2.2" />
+      <PackageReference Include="FSharp.Data" Version="4.2.3" />
+      <PackageReference Include="NATS.Client" Version="0.14.0-pre3" />
       <PackageReference Include="Ply" Version="0.3.1" />
-      <PackageReference Include="System.IO.Pipelines" Version="6.0.0-preview.7.21377.19" />
       <PackageReference Update="FSharp.Core" Version="5.0.2" />
+      <PackageReference Include="System.Reactive" Version="5.0.0" />
+      <PackageReference Include="System.Reactive.Core" Version="5.0.0" />
+      <PackageReference Include="System.Reactive.Interfaces" Version="5.0.0" />
+      <PackageReference Include="System.Reactive.Linq" Version="5.0.0" />
     </ItemGroup>
 
 </Project>

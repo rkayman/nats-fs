@@ -63,8 +63,8 @@ module Utilities =
 
 #if !Windows 
             [<Literal>]
-            let ESC = '\x1B'
-            let clear = $"%c{ESC}[{1}A%c{ESC}[2K"
+            let ESC = '\027'
+            let clear = $"%c{ESC}[1A%c{ESC}[2K"
 #endif
 
             [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
@@ -84,8 +84,14 @@ module Utilities =
                 state.buffer.AppendLine(value) |> ignore 
                 state
                 
-            let NewLine = "\n".AsMemory()
-
+            [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
+            let countLines (ch : char) (width : int) (lines : int byref) (curLineChars : int byref) =
+                if ch = '\n' || width < curLineChars + 1 then
+                    lines <- lines + 1
+                    curLineChars <- 0
+                else
+                    curLineChars <- curLineChars + 1
+                
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
             let flush state =
                 let buf = state.buffer 
@@ -96,15 +102,10 @@ module Utilities =
                     
                     let mutable lines = 0
                     let mutable curLineChars = 0 
-                    for ch in buf.GetChunks() do
-                        if ch = NewLine then
-                            lines <- lines + 1
-                            curLineChars <- 0 
-                        else
-                            curLineChars <- curLineChars + 1
-                            if curLineChars > state.width then
-                                lines <- lines + 1
-                                curLineChars <- 0 
+                    for chunk in buf.GetChunks() do
+                        let span = chunk.Span
+                        for i = 0 to span.Length do
+                            countLines span.[i] state.width &lines &curLineChars
                                 
                     printf $"{buf}\n"
                     buf.Clear() |> ignore 

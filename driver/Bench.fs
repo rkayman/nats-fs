@@ -1,12 +1,14 @@
 namespace Aspir
 
+open System
+open System.Runtime.CompilerServices
+open System.Text
+open System.Threading
+open System.Threading.Channels
+open FSharp.Data
+open FSharp.Control.Tasks.NonAffine.Unsafe
+
 module Channels =
-    
-    open System.Threading
-    open System.Threading.Channels
-    open System.Threading.Tasks
-    open FSharp.Control.Tasks.NonAffine
-    open FSharp.Control.Tasks.NonAffine.Unsafe
     
     let inline (!!) (x: ^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)
         
@@ -25,11 +27,7 @@ module Channels =
     let inline (!<) (ch: ChannelReader<'a>) = (!!<) ch Unchecked.defaultof<CancellationToken>
 
 module Bench =
-    
-    open System
-    open System.Text
-    open System.Threading.Channels
-    open FSharp.Data
+
     open Channels
     
     /// MessagesPerClient divides the number of messages by the number of publishers and tries to
@@ -85,8 +83,6 @@ module Bench =
             $"{rate} msgs/sec ~ {throughput}/sec"
     
     module Sample =
-
-        open System.Runtime.CompilerServices
             
         /// Create makes a new Sample initialized to default values.
         let create =
