@@ -26,7 +26,7 @@
         <PackageReference Include="Expecto.BenchmarkDotNet" Version="9.0.4" />
         <PackageReference Include="Expecto.FsCheck" Version="9.0.4" />
         <PackageReference Include="Expecto.Hopac" Version="9.0.4" />
-        <PackageReference Include="FsCheck" Version="3.0.0-alpha5" />
+        <PackageReference Include="FsCheck" Version="3.0.0-beta1" />
         <PackageReference Include="Hopac" Version="0.5.1" />
         <PackageReference Include="YoloDev.Expecto.TestSdk" Version="0.12.8" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.11.0" />
