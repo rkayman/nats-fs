@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net5.0</TargetFramework>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <WarnOn>3390;$(WarnOn)</WarnOn>
+        <AssemblyName>Aspir.Utilities</AssemblyName>
+        <RootNamespace>Aspir.Utilities</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Actor.fs" />
+        <Compile Include="Console.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Ply" Version="0.3.1" />
+      <PackageReference Update="FSharp.Core" Version="6.0.0" />
+      <PackageReference Include="System.Threading.Channels" Version="6.0.0-rc.2.21480.5" />
+    </ItemGroup>
+
+</Project>
