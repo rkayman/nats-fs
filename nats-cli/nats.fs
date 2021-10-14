@@ -1,18 +1,16 @@
-namespace Aspir.Messaging 
+namespace Aspir.Messaging.Nats 
 
-open System
-open System.Collections.Generic
-open System.Runtime.CompilerServices
-open System.Reactive.Concurrency
-open System.Reactive.Linq
-open System.Threading.Tasks
-open FSharp.Control.Tasks.NonAffine
-open FsToolkit.ErrorHandling
-open NATS.Client
-open NATS.Client.Rx
-open Aspir.Messaging.Actor
-
-module Nats =
+    open System
+    open System.Collections.Generic
+    open System.Runtime.CompilerServices
+    open System.Reactive.Concurrency
+    open System.Reactive.Linq
+    open System.Threading.Tasks
+    open FSharp.Control.Tasks.NonAffine
+    open FsToolkit.ErrorHandling
+    open NATS.Client
+    open NATS.Client.Rx
+    open Aspir.Utilities.Actor
 
     [<AutoOpen>]
     module Client =
@@ -83,11 +81,11 @@ module Nats =
                         return state
                 }
                 
-            let internal connectionError _ state msg ex =
+            let internal connectionError _ state _ ex =
                 let conn = match state.kind with
                            | Standard cn -> cn
                            | Encoded (cn, _, _) -> cn 
-                eprintfn $"[ERROR] Connection '{conn.Opts.Name}' encountered an exception:\n\t%A{ex}"
+                eprintfn $"[ERROR] Connection '{conn.Opts.Name}' encountered an exception:\n[DETAILS] %A{ex}"
                 true 
                 
             let internal createConnection (connType: ConnectionType) =
