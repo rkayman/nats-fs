@@ -5,7 +5,7 @@ open System.Text
 open System.Threading
 open FSharp.Control.Tasks.NonAffine
 
-open Utilities.UiLive
+open Aspir.Utilities.Console
 open Messaging.Nats.Client
 open Messaging.Nats.Client.Actor
 
@@ -41,7 +41,8 @@ module Driver =
                 | Observed msg ->
                     let st = Option.get state.actorState
                     let payload = Encoding.UTF8.GetString(msg.Data)
-                    st.out.Write $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"  
+                    //st.out.Write $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"
+                    printfn $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"  
                     return state
                 | _ -> return state 
             }
