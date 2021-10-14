@@ -5,11 +5,11 @@ VisualStudioVersion = 16.0.30114.105
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "nats", "nats-cli\nats.fsproj", "{D6A80AFA-6E53-4CF0-8487-A2C128F400BD}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "UiProgress", "UiProgress\UiProgress.fsproj", "{2FF23592-D003-4F1E-9DA8-B29BF6782603}"
-EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "driver", "driver\driver.fsproj", "{530C4848-A89E-4870-8874-E90B6726C2FB}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "DriverTests", "Driver.Tests\DriverTests.fsproj", "{45088137-2967-4E92-A793-E2FCA5F0EA62}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Utilities", "Utilities\Utilities.fsproj", "{7571B687-AF0B-4C2B-91D7-EB01006C8387}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -24,10 +24,6 @@ Global
 		{D6A80AFA-6E53-4CF0-8487-A2C128F400BD}.Debug|x64.Build.0 = Debug|x64
 		{D6A80AFA-6E53-4CF0-8487-A2C128F400BD}.Release|x64.ActiveCfg = Release|x64
 		{D6A80AFA-6E53-4CF0-8487-A2C128F400BD}.Release|x64.Build.0 = Release|x64
-		{2FF23592-D003-4F1E-9DA8-B29BF6782603}.Debug|x64.ActiveCfg = Debug|x64
-		{2FF23592-D003-4F1E-9DA8-B29BF6782603}.Debug|x64.Build.0 = Debug|x64
-		{2FF23592-D003-4F1E-9DA8-B29BF6782603}.Release|x64.ActiveCfg = Release|x64
-		{2FF23592-D003-4F1E-9DA8-B29BF6782603}.Release|x64.Build.0 = Release|x64
 		{530C4848-A89E-4870-8874-E90B6726C2FB}.Debug|x64.ActiveCfg = Debug|x64
 		{530C4848-A89E-4870-8874-E90B6726C2FB}.Debug|x64.Build.0 = Debug|x64
 		{530C4848-A89E-4870-8874-E90B6726C2FB}.Release|x64.ActiveCfg = Release|x64
@@ -36,5 +32,9 @@ Global
 		{45088137-2967-4E92-A793-E2FCA5F0EA62}.Release|x64.Build.0 = Release|x64
 		{45088137-2967-4E92-A793-E2FCA5F0EA62}.Debug|x64.ActiveCfg = Debug|x64
 		{45088137-2967-4E92-A793-E2FCA5F0EA62}.Debug|x64.Build.0 = Debug|x64
+		{7571B687-AF0B-4C2B-91D7-EB01006C8387}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7571B687-AF0B-4C2B-91D7-EB01006C8387}.Debug|x64.Build.0 = Debug|Any CPU
+		{7571B687-AF0B-4C2B-91D7-EB01006C8387}.Release|x64.ActiveCfg = Release|Any CPU
+		{7571B687-AF0B-4C2B-91D7-EB01006C8387}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
