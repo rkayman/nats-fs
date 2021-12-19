@@ -145,13 +145,13 @@ namespace Aspir.Messaging.Nats
             let factory = ConnectionFactory()
             
             // TODO: Make tuple that includes a dictionary of KVs from the secret store
-            member __.Yield _ =
+            member _.Yield _ =
                 { config = ConnectionFactory.GetDefaultOptions()
                   serializer = None
                   deserializer = None } 
 
             [<CustomOperation("secretProvider")>]
-            member __.SecretProvider(state, value) =
+            member _.SecretProvider(state, value) =
                 // TODO: setup secret provider
                 NotImplementedException("SecretProvider not yet implemented") |> raise 
                 match value with
@@ -159,66 +159,66 @@ namespace Aspir.Messaging.Nats
                 | Custom _ -> state 
             
             [<CustomOperation("name")>]
-            member __.Name(state, value) =
+            member _.Name(state, value) =
                 // TODO: apply validation logic to value
                 state.config.Name <- value
                 state 
                 
             [<CustomOperation("customInboxPrefix")>]
-            member __.CustomInboxPrefix(state, value) =
+            member _.CustomInboxPrefix(state, value) =
                 // TODO: apply validation logic to value
                 state.config.CustomInboxPrefix <- value
                 state
                     
             [<CustomOperation("verbose")>]
-            member __.Verbose(state, value) =
+            member _.Verbose(state, value) =
                 state.config.Verbose <- value
                 state 
                 
             [<CustomOperation("noEcho")>]
-            member __.NoEcho(state, value) =
+            member _.NoEcho(state, value) =
                 state.config.NoEcho <- value
                 state 
                 
             [<CustomOperation("subscriberDeliveryTaskCount")>]
-            member __.SubscriberDeliveryTaskCount(state, value) =
+            member _.SubscriberDeliveryTaskCount(state, value) =
                 state.config.SubscriberDeliveryTaskCount <- value
                 state 
                 
             [<CustomOperation("secure")>]
-            member __.Secure(state, value) =
+            member _.Secure(state, value) =
                 state.config.Secure <- value
                 state
                 
             [<CustomOperation("user")>]
-            member __.User(state, value) =
+            member _.User(state, value) =
                 state.config.User <- value
                 state 
                 
             [<CustomOperation("password")>]
-            member __.Password(state, value) =
+            member _.Password(state, value) =
                 state.config.Password <- value
                 state 
                 
             [<CustomOperation("token")>]
-            member __.Token(state, value) =
+            member _.Token(state, value) =
                 state.config.Token <- value
                 state 
                 
             [<CustomOperation("url")>]
-            member __.Url(state, value) =
+            member _.Url(state, value) =
                 // TODO: apply validation logic to value 
                 state.config.Url <- value
                 state 
                 
             [<CustomOperation("servers")>]
-            member __.Servers(state, value) =
+            member _.Servers(state, value) =
                 // TODO: apply validation logic to each item in value
                 state.config.Servers <- value
                 state 
                 
             [<CustomOperation("userCredentials")>]
-            member __.UserCredentials(state, value) =
+            member _.UserCredentials(state, value) =
                 match value with
                 | UseNKey (key, PrivateKey path)       -> state.config.SetNkey(key, path)
                 | UseNKey (key, Callback handler)      -> state.config.SetNkey(key, handler)
@@ -228,55 +228,55 @@ namespace Aspir.Messaging.Nats
                 state
                 
             [<CustomOperation("encodeWith")>]
-            member __.EncodeWith (state, serialize: obj -> byte[], deserialize: byte[] -> obj) =
+            member _.EncodeWith (state, serialize: obj -> byte[], deserialize: byte[] -> obj) =
                 { state with serializer = Some serialize; deserializer = Some deserialize }
             
             [<CustomOperation("onDisconnected")>]
-            member __.OnDisconnected(state, value) =
+            member _.OnDisconnected(state, value) =
                 let cfg = state.config
                 let handler = EventHandler<ConnEventArgs>(value)
                 cfg.DisconnectedEventHandler <- handler
                 state 
                 
             [<CustomOperation("onClosed")>]
-            member __.OnClosed(state, value) =
+            member _.OnClosed(state, value) =
                 let cfg = state.config
                 let handler = EventHandler<ConnEventArgs>(value)
                 cfg.ClosedEventHandler <- handler
                 state 
 
             [<CustomOperation("onReconnected")>]
-            member __.OnReconnected(state, value) =
+            member _.OnReconnected(state, value) =
                 let cfg = state.config
                 let handler = EventHandler<ConnEventArgs>(value)
                 cfg.ReconnectedEventHandler <- handler
                 state 
                 
             [<CustomOperation("onServerDiscovered")>]
-            member __.OnServerDiscovered(state, value) =
+            member _.OnServerDiscovered(state, value) =
                 let cfg = state.config
                 let handler = EventHandler<ConnEventArgs>(value)
                 cfg.ServerDiscoveredEventHandler <- handler
                 state
                 
             [<CustomOperation("onLameDuckMode")>]
-            member __.OnLameDuckMode(state, value) =
+            member _.OnLameDuckMode(state, value) =
                 let cfg = state.config
                 let handler = EventHandler<ConnEventArgs>(value)
                 cfg.LameDuckModeEventHandler <- handler
                 state 
 
             [<CustomOperation("asyncErrorOccurred")>]
-            member __.AsyncErrorOccurred(state, errHandler) =
+            member _.AsyncErrorOccurred(state, errHandler) =
                 state.config.AsyncErrorEventHandler <- errHandler
                 state
                 
             [<CustomOperation("remoteCertValidator")>]
-            member __.RemoteCertValidator(state, callback) =
+            member _.RemoteCertValidator(state, callback) =
                 state.config.TLSRemoteCertificationValidationCallback <- callback
                 state 
 
-            member __.Run(state) =
+            member _.Run(state) =
                 match state with
                 | { config = cfg; serializer = None; deserializer = None } ->
                     let conn = factory.CreateConnection(cfg)
@@ -361,7 +361,7 @@ namespace Aspir.Messaging.Nats
         /// } 
         type SubscriptionBuilder internal () =
             
-            member __.Yield _ =
+            member _.Yield _ =
                 { conn = None
                   topic = None
                   msgHandler = None
@@ -369,7 +369,7 @@ namespace Aspir.Messaging.Nats
                   initialState = None }
                 
             [<CustomOperation("withConnection")>]
-            member __.WithConnection(state, value) =
+            member _.WithConnection(state, value) =
                 let st = state.initialState
                          |> Option.map (fun t -> { t with parent = Some value })
                          |> Option.orElse (Some { parent = Some value
@@ -378,26 +378,26 @@ namespace Aspir.Messaging.Nats
                              initialState = st }
                 
             [<CustomOperation("topic")>]
-            member __.Topic(state, value) =
+            member _.Topic(state, value) =
                 { state with topic = Some value }
                 
             [<CustomOperation("messageHandler")>]
-            member __.MessageHandler(state, value) =
+            member _.MessageHandler(state, value) =
                 { state with msgHandler = Some value }
                 
             [<CustomOperation("errorHandler")>]
-            member __.ErrorHandler(state, value) =
+            member _.ErrorHandler(state, value) =
                 { state with errHandler = Some value }
                 
             [<CustomOperation("actorState")>]
-            member __.ActorState(state, value) =
+            member _.ActorState(state, value) =
                 let st = state.initialState
                          |> Option.map (fun t -> { t with actorState = value })
                          |> Option.orElse (Some { parent = None
                                                   actorState = value })
                 { state with initialState = st }
                 
-            member __.Run(state) =
+            member _.Run(state) =
                 match validateSubscriptionBuilderState state with
                 | Error xs ->
                     failwith $"[Error] Unable to create subscription actor owing to the following errors:\n\t{xs}"
@@ -428,11 +428,11 @@ namespace Aspir.Messaging.Nats
         ///     retry RetryPolicy 
         /// }
         type PublisherBuilder internal () =
-            member __.Yield _ =
+            member _.Yield _ =
                 { conn = None }
                 
             [<CustomOperation("useConnection")>]
-            member __.UseConnection(state, value) : PublisherBuilderState<_> =
+            member _.UseConnection(state, value) : PublisherBuilderState<_> =
                 { state with conn = Some value }
                 
                 
@@ -457,7 +457,7 @@ namespace Aspir.Messaging.Nats
         ///     retry RetryPolicy 
         /// }
         type RequesterBuilder internal () =
-            member __.Yield _ =
+            member _.Yield _ =
                 ()
                 
         let request = RequesterBuilder()
