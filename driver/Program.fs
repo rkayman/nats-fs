@@ -1,72 +1,66 @@
 ﻿namespace Aspir
 
-open System
-open System.Text
-open System.Threading
-open FSharp.Control.Tasks.NonAffine
+    open System
+    open System.Runtime.CompilerServices
+    open System.Text
+    open System.Threading
 
-open Aspir.Utilities.Console
-open Messaging.Nats.Client
-open Messaging.Nats.Client.Actor
-
-module Driver =
-        
-    type DumpState = { mutable cnt: int; out: Writer }
+    open Utilities.Console
+    open Messaging.Nats.Client
+    open Messaging.Nats.Client.Actor
     
-    [<EntryPoint>]
-    let main argv =
-        let expectedArgs = 2
-        if Array.length argv <> expectedArgs then
-            failwith $"{expectedArgs} arguments required: <number of subscribers> <subject on which to listen>"
 
-        let numSub = argv.[0] |> Int32.Parse
-        let subject = argv.[1] 
+    module Driver =
 
-        let conn = connect {
-            name "F# Wrapper for .NET NATS Client"
-            url "localhost"
-            onClosed (fun _ args -> printfn $"Connection '{args.Conn.Opts.Name}' closed")
-            onDisconnected (fun _ args -> printfn $"Connection '{args.Conn.Opts.Name}' disconnected")
-            onReconnected (fun _ args -> printfn $"Connection '{args.Conn.Opts.Name}' reconnected")
-        }
-        conn.Start()
-
-        let cts = new CancellationTokenSource()
-        let writer = new Writer(cancel = cts.Token)
-        writer.Start()
-        
-        let body _ state message =
-            vtask {
-                match message with
-                | Observed msg ->
-                    let st = Option.get state.actorState
-                    let payload = Encoding.UTF8.GetString(msg.Data)
-                    //st.out.Write $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"
-                    printfn $"[#{Interlocked.Increment(&st.cnt)}] Received on \"%s{msg.Subject}\"\n%s{payload}\n"  
-                    return state
-                | _ -> return state 
+        [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
+        let body (writer: WriterAgent) (inbox: MailboxProcessor<_>) =
+            let rec loop cnt = async {
+                let! (Observed msg) = inbox.Receive()
+                let payload = Encoding.UTF8.GetString(msg.Data)
+                let cnt' = cnt + 1
+                writer.Write $"[#{cnt'}] Received on \"%s{msg.Subject}\"\n%s{payload}\n\n"
+//                printf $"[#{cnt'}] Received on \"%s{msg.Subject}\"\n%s{payload}\n\n"
+                return! loop cnt' 
             }
+            loop 0 
             
-        let error _ state message err =
-            let st = Option.get state.actorState
-            st.out.Write $"[ERROR] (msg='%A{message}')\n[DETAILS] %A{err}\n"
-            true 
-    
-        use sub = subscribe {
-            withConnection conn
-            topic subject
-            messageHandler body
-            errorHandler error
-            actorState (Some { cnt = 0; out = writer }) 
-        }
-        sub.Start()
+        [<EntryPoint>]
+        let main argv =
+            let expectedArgs = 1
+            if Array.length argv <> expectedArgs then
+                failwith $"{expectedArgs} arguments required: <number of subscribers> <subject on which to listen>"
 
-        Console.ReadKey() |> ignore 
+            use cts = new CancellationTokenSource()
+            use writer = new WriterAgent(cancellationToken = cts.Token)
+            try
+                try 
+                    let subject = argv.[0] 
+                    //let numSub = argv.[0] |> Int32.Parse
+                    
+                    use conn = connect {
+                        name "F# Wrapper for .NET NATS Client"
+                        url "localhost"
+                        onClosed (fun _ args -> printfn $"Connection '{args.Conn.Opts.Name}' closed")
+                        onDisconnected (fun _ args -> printfn $"Connection '{args.Conn.Opts.Name}' disconnected")
+                        onReconnected (fun _ args -> printfn $"Connection '{args.Conn.Opts.Name}' reconnected")
+                    }
 
-        sub.Stop()
-        conn.Stop() 
-        writer.Flush()
-        writer.Stop()
-        cts.Cancel()
+                    writer.Start() 
+                    let agentBody = body writer 
+                    use sub = subscribe {
+                        withConnection conn
+                        topic subject
+                        body agentBody
+                    }
 
-        0
+                    Console.ReadKey() |> ignore
+                    
+                with ex ->
+                    eprintfn $"[ERROR] %A{ex}" 
+
+            finally 
+                writer.Flush()
+                writer.Stop()
+                cts.Cancel()
+
+            0

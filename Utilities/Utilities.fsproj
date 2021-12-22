@@ -10,13 +10,13 @@
 
     <ItemGroup>
         <Compile Include="Actor.fs" />
+        <Compile Include="Agent.fs" />
         <Compile Include="Console.fs" />
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Ply" Version="0.3.1" />
       <PackageReference Update="FSharp.Core" Version="6.0.0" />
-      <PackageReference Include="System.Threading.Channels" Version="6.0.0-rc.2.21480.5" />
+      <PackageReference Include="Ply" Version="0.3.1" />
     </ItemGroup>
 
 </Project>

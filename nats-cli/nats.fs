@@ -2,96 +2,151 @@ namespace Aspir.Messaging.Nats
 
     open System
     open System.Collections.Generic
-    open System.Runtime.CompilerServices
     open System.Reactive.Concurrency
     open System.Reactive.Linq
-    open System.Threading.Tasks
-    open FSharp.Control.Tasks.NonAffine
+    open System.Threading
     open FsToolkit.ErrorHandling
     open NATS.Client
     open NATS.Client.Rx
-    open Aspir.Utilities.Actor
 
+    
     [<AutoOpen>]
     module Client =
         
         module Actor =
+            
+            [<AbstractClass>]
+            type Agent<'Msg>() =
+                abstract member Agent : MailboxProcessor<'Msg>
+                abstract member CancellationToken : CancellationToken 
+                abstract member Tell        : 'Msg -> unit 
+                abstract member Ask         : (AsyncReplyChannel<'Reply> -> 'Msg) * int option -> 'Reply
+                abstract member TryAsk      : (AsyncReplyChannel<'Reply> -> 'Msg) * int option -> 'Reply option 
+                abstract member AskAsync    : (AsyncReplyChannel<'Reply> -> 'Msg) * int option -> Async<'Reply>
+                abstract member TryAskAsync : (AsyncReplyChannel<'Reply> -> 'Msg) * int option -> Async<'Reply option>
+                abstract member Dispose     : unit -> unit 
+
+                default this.Tell(message) = this.Agent.Post(message)
+                default this.Ask(message, ?timeout) =
+                    timeout |> Option.map (fun t -> this.Agent.PostAndReply(message, t))
+                            |> Option.defaultWith (fun _ -> this.Agent.PostAndReply(message))
+                default this.TryAsk(message, ?timeout) =
+                    timeout |> Option.map (fun t -> this.Agent.TryPostAndReply(message, t))
+                            |> Option.defaultWith (fun _ -> this.Agent.TryPostAndReply(message))
+                default this.AskAsync(message, ?timeout) =
+                    timeout |> Option.map (fun t -> this.Agent.PostAndAsyncReply(message, t))
+                            |> Option.defaultWith (fun _ -> this.Agent.PostAndAsyncReply(message))
+                default this.TryAskAsync(message, ?timeout) =
+                    timeout |> Option.map (fun t -> this.Agent.PostAndTryAsyncReply(message, t))
+                            |> Option.defaultWith (fun _ -> this.Agent.PostAndTryAsyncReply(message))
+                            
 
             exception SubscriptionKeyAlreadyExists of string 
             
             type NatsMessage =
                 | Observed of Msg
-                | ObservedEncoded of Msg * obj 
 
-            and SubscriptionMessageHandler<'a> = ActorMessageHandler<NatsMessage,SubscriptionActorState<'a>>
+            type ConnectionMessage =
+                | ConnectToServer of config: Options
+                | SubscribeToTopic of topic: string
+                                      * body: (MailboxProcessor<NatsMessage> -> Async<unit>) 
+                                      * reply: AsyncReplyChannel<Result<SubscriptionAgent, Exception>>
             
-            and SubscriptionErrorHandler<'a> = ActorErrorHandler<NatsMessage,SubscriptionActorState<'a>>
-            
-            and SubscriptionActorState<'a> =
-                { parent : IActor<ConnectionMessage<'a>> option 
-                  actorState : 'a option }
+            and SubscriptionAgent internal (connection: IConnection,
+                                            topic: string,
+                                            body: MailboxProcessor<NatsMessage> -> Async<unit>,
+                                            ?cancellationToken: CancellationToken,
+                                            ?observerThread: IScheduler) =
+                inherit Agent<NatsMessage>()
+
+                let cts = new CancellationTokenSource()
+
+                let token = cancellationToken |> Option.defaultValue cts.Token
                 
-            and SubscriptionDetails<'a> =
-                { subject: string
-                  messageHandler: SubscriptionMessageHandler<'a>
-                  errorHandler: SubscriptionErrorHandler<'a> option 
-                  state: SubscriptionActorState<'a> }
-            
-            and ConnectionType =
-                | Standard of IConnection
-                | Encoded of conn: IConnection * serialize: (obj -> byte[]) * deserialize: (byte[] -> obj) 
+                let agent = MailboxProcessor.Start(body, token)
                 
-            and ConnectionState<'a> =
-                { kind: ConnectionType
-                  subs: Dictionary<string,SubscriptionDetails<'a> * IDisposable * IActor<NatsMessage>> }
+                let thread = observerThread |> Option.defaultValue (ThreadPoolScheduler.Instance :> IScheduler)
                 
-            and ConnectionMessage<'a> =
-                | CreateSubscription of details: SubscriptionDetails<'a>
-                                      * reply: TaskCompletionSource<IActor<NatsMessage>> 
+                let sub = connection.Observe(topic)
+                                    .ObserveOn(thread)
+                                    .Select(Observed)
+                                    .Subscribe(agent.Post) 
                 
-            let private subscribe (conn: IConnection) subj (actor: IActor<_>) =
-                conn.Observe(subj)
-                    .ObserveOn(ThreadPoolScheduler.Instance)
-                    .Select(Observed)
-                    .Subscribe(actor.Tell)
+                override __.Agent with get() = agent 
                 
-            [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]                
-            let internal connectionBody _ state msg =
-                // TODO: Need to handle OnError/OnException and OnComplete for Subscribe
-                vtask {
-                    match msg with
-                    | CreateSubscription (info, reply) ->
-                        let conn, map = match state.kind with
-                                        | Standard cn -> cn, Observed 
-                                        | Encoded (cn, _, f) -> cn, (fun t -> ObservedEncoded(t, f t.Data)) 
-                        if state.subs.ContainsKey(info.subject) then
-                            let ex = SubscriptionKeyAlreadyExists($"[{info.subject}] already exists")
-                            reply.SetException(ex)
-                        else
-                            let subActor = if Option.isNone info.errorHandler then
-                                               Actor.Create(info.state, info.messageHandler)
-                                           else
-                                               Actor.Create(info.state, info.messageHandler, info.errorHandler.Value)
-                            let sub = conn.Observe(info.subject)
-                                          .ObserveOn(ThreadPoolScheduler.Instance)
-                                          .Select(map)
-                                          .Subscribe(subActor.Tell) 
-                            state.subs.Add(info.subject, (info, sub, subActor))
-                            reply.SetResult(subActor)
-                        return state
-                }
+                override __.CancellationToken with get() = token 
                 
-            let internal connectionError _ state _ ex =
-                let conn = match state.kind with
-                           | Standard cn -> cn
-                           | Encoded (cn, _, _) -> cn 
-                eprintfn $"[ERROR] Connection '{conn.Opts.Name}' encountered an exception:\n[DETAILS] %A{ex}"
-                true 
+                override this.Dispose() = (this :> IDisposable).Dispose() 
                 
-            let internal createConnection (connType: ConnectionType) =
-                let state = { kind = connType
-                              subs = Dictionary<string,SubscriptionDetails<_> * IDisposable * IActor<_>>() }
-                Actor.Create(state, connectionBody, connectionError) 
+                interface IDisposable with
+                    member __.Dispose() =
+                        sub.Dispose() 
+                        cts.Dispose()
+                        (agent :> IDisposable).Dispose() 
+                
+            and ConnectionAgent(?cancellationToken: CancellationToken) =
+                inherit Agent<ConnectionMessage>()
+
+                let cts = new CancellationTokenSource()
+                
+                let token = cancellationToken |> Option.defaultValue cts.Token
+                
+                let subscriptions = Dictionary<string, SubscriptionAgent>(5)
+                
+                let factory = ConnectionFactory()
+                
+                let thread = NewThreadScheduler.Default 
+                
+                let agent =
+                    MailboxProcessor.Start((fun inbox ->
+                        let rec running (conn: IConnection)
+                                     (subs: IDictionary<string, SubscriptionAgent>) =
+                            async {
+                                let! msg = inbox.Receive()
+                                match msg with
+                                | SubscribeToTopic (topic, body, reply) ->
+                                    match subs.TryGetValue(topic) with
+                                    | false, _ ->
+                                        let sub = new SubscriptionAgent(conn, topic, body, token, thread)
+                                        subs.Add(topic, sub)
+                                        reply.Reply(Ok sub) 
+
+                                    | true, _ ->
+                                        let ex = SubscriptionKeyAlreadyExists $"A subscription already exists for '{topic}'"
+                                        reply.Reply(Error ex) 
+
+                                    return! running conn subs
+
+                                | _ ->
+                                    eprintfn $"[WARNING] Connection '{conn.Opts.Name}' is already open."
+                                    return! running conn subs 
+                            }
+                        and starting subs =
+                            async {
+                                let! msg = inbox.Receive()
+                                match msg with
+                                | ConnectToServer cfg ->
+                                    let conn = factory.CreateConnection(cfg)
+                                    return! running conn subs
+                                | _ ->
+                                    eprintfn $"[ERROR] A connection is required to subscribe. Make sure there is an open connection."
+                                    return! starting subs 
+                            }
+                        starting subscriptions), token)
+                
+                override this.Agent with get() = agent
+                
+                override this.CancellationToken with get() = token
+                
+                override this.Dispose() = (this :> IDisposable).Dispose()
+                
+                interface IDisposable with
+                    member __.Dispose() =
+                        cts.Dispose()
+                        (agent :> IDisposable).Dispose() 
+                
+        
+        open Actor
         
         type SecretProviders =
             | AzureKeyVault of foo: unit 
@@ -107,10 +162,7 @@ namespace Aspir.Messaging.Nats
             | PrivateKey of path: string
             | Callback of handler: EventHandler<UserSignatureEventArgs>
 
-        type ConnectionBuilderState =
-            { config: Options
-              serializer: (obj -> byte[]) option
-              deserializer: (byte[] -> obj) option }
+        type ConnectionBuilderState = { config: Options }
         
         /// ```fsharp
         ///
@@ -122,7 +174,6 @@ namespace Aspir.Messaging.Nats
         ///     noEcho false
         ///     subscriberDeliveryTaskCount 5 
         ///     secure true
-        ///     encodeWith serializer deserializer
         ///     user "nats_user"
         ///     password "secret_password"
         ///     token "magic_token"
@@ -142,13 +193,9 @@ namespace Aspir.Messaging.Nats
         ///     userCredentials (UseNKey (nKey, PrivateKey pvtKeyPath)) 
         /// } 
         type ConnectionBuilder internal () =
-            let factory = ConnectionFactory()
-            
             // TODO: Make tuple that includes a dictionary of KVs from the secret store
             member _.Yield _ =
-                { config = ConnectionFactory.GetDefaultOptions()
-                  serializer = None
-                  deserializer = None } 
+                { config = ConnectionFactory.GetDefaultOptions() } 
 
             [<CustomOperation("secretProvider")>]
             member _.SecretProvider(state, value) =
@@ -226,10 +273,6 @@ namespace Aspir.Messaging.Nats
                 | UsePaths (credPath, Some pvtKeyPath) -> state.config.SetUserCredentials(credPath, pvtKeyPath) 
                 | UseJwt (jwtEvent, sigEvent)          -> state.config.SetUserCredentialHandlers(jwtEvent, sigEvent) 
                 state
-                
-            [<CustomOperation("encodeWith")>]
-            member _.EncodeWith (state, serialize: obj -> byte[], deserialize: byte[] -> obj) =
-                { state with serializer = Some serialize; deserializer = Some deserialize }
             
             [<CustomOperation("onDisconnected")>]
             member _.OnDisconnected(state, value) =
@@ -277,32 +320,20 @@ namespace Aspir.Messaging.Nats
                 state 
 
             member _.Run(state) =
-                match state with
-                | { config = cfg; serializer = None; deserializer = None } ->
-                    let conn = factory.CreateConnection(cfg)
-                    Actor.createConnection (Actor.Standard conn)
-
-                | { config = cfg; serializer = Some s; deserializer = Some d } ->
-                    let conn = factory.CreateConnection(cfg)
-                    Actor.createConnection (Actor.Encoded (conn, s, d))
-
-                | { config = _; serializer = Some _; deserializer = None } ->
-                    failwith "Missing deserializer.  A deserializer is needed for the encoded connection"
-
-                | { config = _; serializer = None; deserializer = Some _ } ->
-                    failwith "Missing serializer.  A serializer is needed fr the encoded connection"
+                let { config = cfg } = state
+                let agent = new ConnectionAgent()
+                agent.Tell (ConnectToServer cfg)
+                agent 
                 
         let connect = ConnectionBuilder() 
 
         
         type SubscriptionBuilderState<'a> =
-            { conn : IActor<Actor.ConnectionMessage<'a>> option
+            { connAgent : ConnectionAgent option
               topic : string option
-              msgHandler : Actor.SubscriptionMessageHandler<'a> option
-              errHandler : Actor.SubscriptionErrorHandler<'a> option
-              initialState : Actor.SubscriptionActorState<'a> option }
-        
-        let private validateConnectionActor (actor: IActor<Actor.ConnectionMessage<_>> option) =
+              body : (MailboxProcessor<NatsMessage> -> Async<unit>) option }
+
+        let private validateConnectionActor (actor: ConnectionAgent option) = // (actor: IActor<Actor.ConnectionMessage<_>> option) =
             match actor with
             | None -> Error "Missing required NATS connection actor"
             | Some t -> Ok t
@@ -315,24 +346,18 @@ namespace Aspir.Messaging.Nats
                     Error "Topic (Subject) cannot be null or empty"
                 else
                     Ok t
-                    
-        let private validateState (state: Actor.SubscriptionActorState<_> option) =
-            match state with
-            | None -> Error "Unexpected Error. SubscriptionActorState is not set.  Very likely, the connection has not been set either."
-            | Some t -> Ok t 
-                    
-        let private validateMessageHandler (handler: Actor.SubscriptionMessageHandler<'State> option) =
-            match handler with
+
+        let private validateBody (body: (MailboxProcessor<NatsMessage> -> Async<unit>) option) =
+            match body with
             | None -> Error "The subscription actor requires a message handler to operate"
             | Some t -> Ok t
             
         let private validateSubscriptionBuilderState state =
             validation {
-                let! conn = validateConnectionActor state.conn
+                let! conn = validateConnectionActor state.connAgent
                 and! topic = validateTopic state.topic
-                and! handler = validateMessageHandler state.msgHandler
-                and! subState = validateState state.initialState 
-                return {| cn = conn; subj = topic; msgh = handler; errh = state.errHandler; st = subState |}
+                and! body = validateBody state.body 
+                return {| connAgent = conn; topic = topic; body = body |}
             }
         
         /// ```fsharp
@@ -340,9 +365,7 @@ namespace Aspir.Messaging.Nats
         /// let sub = subscribe {
         ///     useConnection conn
         ///     topic "aspir.workflows.>"
-        ///     messageHandler (NatsActorMessageHandler<'State>) 
-        ///     errorHandler (NatsActorErrorHandler<'State>)
-        ///     actorState (Some { foo = Foo; bar = Bar })
+        ///     body (MailboxProcessor<NatsMessage -> Async<unit>)
         ///
         ///     (** FUTURE **)
         ///     actorForTopic initialState messageHandler exceptionHandler
@@ -364,55 +387,100 @@ namespace Aspir.Messaging.Nats
             member _.Yield _ =
                 { conn = None
                   topic = None
-                  msgHandler = None
-                  errHandler = None
-                  initialState = None }
+                  body = None }
                 
             [<CustomOperation("withConnection")>]
             member _.WithConnection(state, value) =
-                let st = state.initialState
-                         |> Option.map (fun t -> { t with parent = Some value })
-                         |> Option.orElse (Some { parent = Some value
-                                                  actorState = None })
-                { state with conn = Some value
-                             initialState = st }
+                { state with connAgent = Some value }
                 
             [<CustomOperation("topic")>]
             member _.Topic(state, value) =
                 { state with topic = Some value }
                 
-            [<CustomOperation("messageHandler")>]
-            member _.MessageHandler(state, value) =
-                { state with msgHandler = Some value }
-                
-            [<CustomOperation("errorHandler")>]
-            member _.ErrorHandler(state, value) =
-                { state with errHandler = Some value }
-                
-            [<CustomOperation("actorState")>]
-            member _.ActorState(state, value) =
-                let st = state.initialState
-                         |> Option.map (fun t -> { t with actorState = value })
-                         |> Option.orElse (Some { parent = None
-                                                  actorState = value })
-                { state with initialState = st }
-                
+<<<<<<< Updated upstream
+            [<CustomOperation("body")>]
+            member _.Body(state, value) =
+                { state with body = Some value }
+                                
             member _.Run(state) =
                 match validateSubscriptionBuilderState state with
                 | Error xs ->
                     failwith $"[Error] Unable to create subscription actor owing to the following errors:\n\t{xs}"
                 | Ok x ->
-                    let details = { Actor.subject = x.subj
-                                    Actor.messageHandler = x.msgh
-                                    Actor.errorHandler =  x.errh
-                                    Actor.state = x.st }
-                    x.cn.Ask(fun reply -> Actor.CreateSubscription (details, reply))
+                      let message = fun ch -> SubscribeToTopic (x.topic, x.body, ch)
+                      x.connAgent.Ask(message, None)
+                      |> Result.valueOr (fun ex -> failwith $"[ERROR] {ex.ToString()}")
                 
         let subscribe = SubscriptionBuilder() 
 
         
-        type PublisherBuilderState<'a> =
-            { conn : IActor<Actor.ConnectionMessage<'a>> option }
+        type AgentDelegate = MailboxProcessor<NatsMessage> -> Async<unit> 
+        /// ```fsharp
+        /// 
+        /// let svc = service {
+        ///     useConnection conn
+        ///     listenTo "aspir.workflows.>" AgentPerTopic AgentDelegate 
+        ///     publishTo "aspir.travelers.<empId>.<pnr>.<juris>" AgentDelegate 
+        ///     ** needed? ** replyTo "aspir.travelers.<empId>.travels" AgentDelegate 
+        ///
+        ///     (** FUTURE **)
+        ///     type AgentInstancing = AgentPerTopic | AgentSingleton
+        ///     type ScalePolicy = Scale min: int * max: int 
+        ///     type StartPolicy =
+        ///         | Immediately
+        ///         | StartAfter duration: TimeSpan
+        ///         | StartAt timeOfDay: DateTimeOffset
+        ///     type EndPolicy =
+        ///         | EndAt timeOfDate: DateTimeOffset
+        ///         | EndAfter duration: TimeSpan
+        ///         | Take messageCount: int
+        ///         | Naturally 
+        ///
+        ///     (** FUTURE **)
+        ///     listenTo <topic> <instancing> ([Take n] | [Time t] | [TakeOrTime n t]) <agentDelegate>
+        ///     publishTo <topic> ([SendAfter duration] | [SendAt timeOfDay]) (Repeat <see below>) <agentDelegate> 
+        ///     repeat [Every 2<sec|min|hrs|days|wks|mos> | Monthly (Day 1) | ...]
+        ///     retry RetryPolicy 
+        ///
+        ///     (** Add capabilities to create based on NATS queues or subject wildcards **)
+        ///     TODO: nats pub traveler.<empId>.<travels>.<juris>
+        ///     TODO: nats pub --reply=__INBOX.ab456fd traveler.<empId>.<rewards>.<juris>
+        ///     TODO: sub traveler.>
+        ///     TODO: sub --queue=Travels traveler.*.<travels>.* 
+        /// } 
+        type ServiceBuilder internal () =
+            
+            member _.Yield _ =
+                { connAgent = None
+                  topic = None
+                  body = None }
+                
+            [<CustomOperation("withConnection")>]
+            member _.WithConnection(state, value) =
+                { state with connAgent = Some value }
+                
+            [<CustomOperation("topic")>]
+            member _.Topic(state, value) =
+                { state with topic = Some value }
+                
+            [<CustomOperation("body")>]
+            member _.Body(state, value) =
+                { state with body = Some value }
+                                
+            member _.Run(state) =
+                match validateSubscriptionBuilderState state with
+                | Error xs ->
+                    failwith $"[Error] Unable to create subscription actor owing to the following errors:\n\t{xs}"
+                | Ok x ->
+                      let message = fun ch -> SubscribeToTopic (x.topic, x.body, ch)
+                      x.connAgent.Ask(message, None)
+                      |> Result.valueOr (fun ex -> failwith $"[ERROR] {ex.ToString()}")
+                
+        let service = ServiceBuilder() 
+
+        
+//        type PublisherBuilderState<'a> =
+//            { conn : IActor<Actor.ConnectionMessage<'a>> option }
             
         /// ```fsharp
         ///
@@ -427,16 +495,16 @@ namespace Aspir.Messaging.Nats
         ///     repeat [Every 2<sec|min|hrs|days|wks|mos> | Monthly (Day 1) | ...]
         ///     retry RetryPolicy 
         /// }
-        type PublisherBuilder internal () =
-            member _.Yield _ =
-                { conn = None }
+//        type PublisherBuilder internal () =
+//            member _.Yield _ =
+//                { conn = None }
+//                
+//            [<CustomOperation("useConnection")>]
+//            member _.UseConnection(state, value) : PublisherBuilderState<_> =
+//                { state with conn = Some value }
                 
-            [<CustomOperation("useConnection")>]
-            member _.UseConnection(state, value) : PublisherBuilderState<_> =
-                { state with conn = Some value }
                 
-                
-        let publish = PublisherBuilder()
+//        let publish = PublisherBuilder()
         
         // TODO: Change example to match request CE
         /// ```fsharp
@@ -456,10 +524,10 @@ namespace Aspir.Messaging.Nats
         ///     repeat [Every 2<sec|min|hrs|days|wks|mos> | Monthly (Day 1) | ...]
         ///     retry RetryPolicy 
         /// }
-        type RequesterBuilder internal () =
-            member _.Yield _ =
-                ()
-                
-        let request = RequesterBuilder()
+//        type RequesterBuilder internal () =
+//            member _.Yield _ =
+//                ()
+//                
+//        let request = RequesterBuilder()
         
         

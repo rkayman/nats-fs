@@ -5,9 +5,8 @@ namespace Aspir.Utilities
     open System.Text
     open System.Threading
 
-
     module Console =
-        
+
         /// RefreshInterval in the default time duration to wait for refreshing the output 
         let DefaultRefreshInterval = TimeSpan.FromMilliseconds(12.5) 
 
@@ -19,7 +18,9 @@ namespace Aspir.Utilities
               /// Buffer is the buffer ready to be written to the terminal
               buffer: StringBuilder
               /// LineCount represents the number of lines (i.e. \n) previously written to the terminal
-              lineCount: int 
+              lineCount: int
+              /// ClearLines represents the intent to overwrite something that was written
+              clearLines: bool 
               /// RefreshInterval in the time duration to wait for refreshing the output 
               refreshInterval: TimeSpan
               /// Ticker is the timer controlling the refresh rate of the progress bar 
@@ -30,130 +31,121 @@ namespace Aspir.Utilities
                 { height          = h
                   width           = w
                   buffer          = StringBuilder(h * w * 4)
-                  lineCount       = 0 
+                  lineCount       = 0
+                  clearLines      = false 
                   refreshInterval = DefaultRefreshInterval
                   ticker          = None }
-
-        type private ConsoleCommand =
-            | Write of string
-            | Start 
-            | Stop 
-            | Refresh of TimeSpan 
-            | Flush 
-            | ShutDown of AsyncReplyChannel<unit> 
-            
-        type Writer(?state: WriterState, ?cancel: CancellationToken) as this =
-
-            let writer = state |> Option.defaultValue (WriterState.CreateDefault())
                 
-            let newTimer () =
-                Some (new Timer(this.TimerCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan))
+        type private WriterCommand =
+            | Start 
+            | Write of string
+            | Refresh of TimeSpan
+            | Flush
+            | Stop of AsyncReplyChannel<unit> 
             
-            let changeTimer (interval: TimeSpan) (t: Timer) = t.Change(interval, interval) |> ignore 
+        type WriterAgent(?writerState: WriterState, ?cancellationToken: CancellationToken) =
+            let state = defaultArg writerState (WriterState.CreateDefault())
+            let cts = new CancellationTokenSource()
+            let token = defaultArg cancellationToken cts.Token
 
-            let startTicker state =                
-                let ticker' = state.ticker |> Option.orElseWith newTimer
-                ticker' |> Option.iter (changeTimer state.refreshInterval)
-                { state with ticker = ticker' }
-                    
-            let stopTicker state =
-                state.ticker |> Option.iter (changeTimer Timeout.InfiniteTimeSpan)
-                state
-
-    #if !Windows 
+#if !Windows 
             [<Literal>]
             let ESC = '\027'
             let clear = $"%c{ESC}[1A%c{ESC}[2K"
-    #endif
+#endif
 
             [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             let clearLines cnt =
-    #if !Windows
+#if !Windows
                 clear |> String.replicate cnt |> printf "%s"
-    #else
+#else
                 Console.SetCursorPosition(0, Console.CursorTop - cnt)
                 let clr = " " |> String.replicate Console.WindowWidth
                 for i = 1 to cnt do 
                     printf $"{clr}"
                 Console.SetCursorPosition(0, Console.CursorTop - cnt)
-    #endif
-            
-            [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
-            let write value state =
-                state.buffer.AppendLine(value) |> ignore 
-                state
-                
-            [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
-            let countLines (ch : char) (width : int) (lines : int byref) (curLineChars : int byref) =
-                if ch = '\n' || width < curLineChars + 1 then
-                    lines <- lines + 1
-                    curLineChars <- 0
-                else
-                    curLineChars <- curLineChars + 1
-                
+#endif
+
             [<MethodImpl(MethodImplOptions.AggressiveOptimization)>]
             let flush state =
-                let buf = state.buffer 
-                if buf.Length = 0 then
+                if state.buffer.Length = 0 then state
+                elif not state.clearLines then
+                    printf $"{state.buffer}"
+                    state.buffer.Clear() |> ignore
                     state
                 else
                     clearLines state.lineCount
-                    
+                
+                    let buf = state.buffer.ToString() 
                     let mutable lines = 0
-                    let mutable curLineChars = 0 
-                    for chunk in buf.GetChunks() do
-                        let span = chunk.Span
-                        for i = 0 to span.Length do
-                            countLines span.[i] state.width &lines &curLineChars
-                                
-                    printf $"{buf}\n"
-                    buf.Clear() |> ignore 
-                    { state with lineCount = lines }
+                    let mutable span = buf.AsSpan() 
+                    let mutable index' = 0
+                    let mutable index = span.IndexOf('\n')
+                    while index >= 0 do
+                        lines <- if index - index' + 1 > state.width then lines + 2 else lines + 1
+                        index' <- index + 1
+                        span <- span.Slice(index')
+                        index <- span.IndexOf('\n') 
                     
-            let cts = new CancellationTokenSource()
-            let token = cancel |> Option.defaultValue cts.Token 
-
+                    lines <- if span.Length - index' > state.width then lines + 1 else lines
+                    printf $"{buf}"
+                    state.buffer.Clear() |> ignore 
+                    {state with lineCount = lines }
+                    
+            
+            let changeTimer (interval: TimeSpan) (t: Timer) = t.Change(interval, interval) |> ignore 
+            
             let agent =
                 MailboxProcessor.Start((fun inbox ->
-                    let rec loop state = async {
-                        if token.IsCancellationRequested then return () 
-                        let! msg = inbox.Receive()
-                        match msg with
-                        | Write value ->
-                            return! state |> write value |> loop 
-                        | Flush ->
-                            return! state |> flush |> loop
-                        | Start ->
-                            return! state |> startTicker |> loop 
-                        | Stop ->
-                            return! state |> stopTicker |> loop 
-                        | Refresh interval -> 
-                            return! loop { state with refreshInterval = interval }
-                        | ShutDown ch ->
-                            state.ticker |> Option.iter (fun t -> t.Dispose()) 
-                            ch.Reply() 
+                    let rec loop st = async {
+                        try 
+                            let! msg = inbox.Receive()
+                            match msg with
+                            | Start ->
+                                let timer = new Timer((fun _ -> inbox.Post(Flush)), null,
+                                                      st.refreshInterval, st.refreshInterval) 
+                                return! loop { st with ticker = Some timer }
+
+                            | Stop ch ->
+                                st.ticker |> Option.iter (changeTimer Timeout.InfiniteTimeSpan)
+                                ch.Reply()
+                                return ()
+
+                            | Write value ->
+                                st.buffer.Append(value) |> ignore 
+                                return! loop st
+     
+                            | Refresh interval ->
+                                st.ticker |> Option.iter (changeTimer interval)
+                                return! loop { st with refreshInterval = interval } 
+     
+                            | Flush ->
+                                let st' = flush st 
+                                return! loop st'
+
+                        with ex ->
+                            failwith $"[ERROR]: {ex.ToString()}"
                     }
-                    loop writer), token)
+                    loop state), token)
             
-            member private _.TimerCallback _ = this.Flush()
+            member __.Write(value) = agent.Post(Write value) 
             
-            member _.Write(value) = agent.Post (Write value)
+            member __.Flush() = agent.Post(Flush) 
             
-            member _.Flush() = agent.Post Flush 
+            member __.SetRefreshInterval(interval) = agent.Post(Refresh interval) 
             
-            member _.SetRefreshInterval(interval) = agent.Post (Refresh interval)
+            member this.Start() = agent.Post(Start) 
             
-            member _.Start() = agent.Post Start
+            member __.Stop() = agent.PostAndReply(Stop) 
             
-            member _.Stop() = agent.Post Stop
+            member this.Dispose() = (this :> IDisposable).Dispose() 
             
-            member x.Dispose() = (x :> IDisposable).Dispose() 
-             
             interface IDisposable with
-                member _.Dispose() =
-                    agent.PostAndReply ShutDown 
-                    cts.Dispose()
+                member this.Dispose() =
+                    this.Stop()
                     (agent :> IDisposable).Dispose() 
+                    state.ticker |> Option.iter (fun t -> t.Dispose())
+                    cts.Dispose() 
 
 
         module Controls = 
@@ -229,7 +221,7 @@ namespace Aspir.Utilities
             /// </summary>
             exception ErrMaxCurrentReached of string
 
-            type Bar(?barState: BarState, ?cancel: CancellationToken) as this =
+            type Bar(?barState: BarState, ?cancel: CancellationToken) =
                 let bar = barState |> Option.defaultValue (BarState.CreateDefault())
                 
                 let setValue n bar = if n > bar.total
@@ -363,7 +355,7 @@ namespace Aspir.Utilities
                 
                 member _.Cancel() = cts.Cancel()
                 
-                member _.Dispose() = (this :> IDisposable).Dispose()
+                member this.Dispose() = (this :> IDisposable).Dispose()
                     
                 override _.ToString() = agent.PostAndReply ToString 
                     
@@ -397,16 +389,19 @@ namespace Aspir.Utilities
 
         type private ProgressCommand =
             | AddBar of int * AsyncReplyChannel<Bar> 
-            | Start 
+            | Start of Progress 
             | Stop 
             | SetRefreshInterval of TimeSpan 
             | Display
             | IsComplete of AsyncReplyChannel<bool> 
             | ShutDown of AsyncReplyChannel<unit> 
             
-        type Progress(?state: ProgressState, ?cancel: CancellationToken) as this =
-            let progress = state |> Option.defaultValue (ProgressState.CreateDefault())
+        and Progress(?state: ProgressState, ?cancel: CancellationToken) =
+            let progress = defaultArg state (ProgressState.CreateDefault())
             
+            let cts = new CancellationTokenSource()
+            let token = defaultArg cancel cts.Token 
+
             let addBar total state = 
                 let bar = new Bar(total, state.width) 
                 { state with bars = state.bars @ [bar] } 
@@ -420,13 +415,13 @@ namespace Aspir.Utilities
                 Console.CursorVisible <- true 
                 if state.pos.IsSome then state else { state with pos = Some (curX, curY) }
                 
-            let newTimer () =
+            let newTimer (this: Progress) () =
                 Some (new Timer(this.TimerCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan))
             
             let changeTimer (interval: TimeSpan) (t: Timer) = t.Change(interval, interval) |> ignore 
 
-            let startTicker state =                
-                let ticker' = state.ticker |> Option.orElseWith newTimer
+            let startTicker this state =                
+                let ticker' = state.ticker |> Option.orElseWith (newTimer this)
                 ticker' |> Option.iter (changeTimer state.refreshInterval)
                 { state with ticker = ticker' }
                     
@@ -437,9 +432,6 @@ namespace Aspir.Utilities
             let isComplete state =
                 state.bars |> List.forall (fun x -> x.IsComplete) 
                 
-            let cts = new CancellationTokenSource()
-            let token = cancel |> Option.defaultValue cts.Token 
-
             let agent =
                 MailboxProcessor.Start((fun inbox ->
                     let rec loop state = async {
@@ -451,8 +443,8 @@ namespace Aspir.Utilities
                             let bar = state'.bars |> List.last
                             ch.Reply(bar) 
                             return! loop state' 
-                        | Start ->
-                            return! state |> startTicker |> loop 
+                        | Start this ->
+                            return! state |> startTicker this |> loop 
                         | Stop ->
                             return! state |> stopTicker |> loop 
                         | SetRefreshInterval n -> 
@@ -469,7 +461,7 @@ namespace Aspir.Utilities
                     }
                     loop progress), token)
             
-            member private _.TimerCallback _ = this.Display()
+            member private this.TimerCallback _ = this.Display()
 
             member _.AddBar(total) = 
                 let buildMessage channel = AddBar (total, channel) 
@@ -481,7 +473,7 @@ namespace Aspir.Utilities
             
             member _.SetRefreshInterval(interval) = agent.Post (SetRefreshInterval interval)
             
-            member _.Start() = agent.Post Start
+            member this.Start() = agent.Post (Start this)
             
             member _.Stop() = agent.Post Stop
             
