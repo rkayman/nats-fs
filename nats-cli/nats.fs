@@ -194,6 +194,7 @@ namespace Aspir.Messaging.Nats
         /// } 
         type ConnectionBuilder internal () =
             // TODO: Make tuple that includes a dictionary of KVs from the secret store
+<<<<<<< Updated upstream
             member _.Yield _ =
                 { config = ConnectionFactory.GetDefaultOptions() } 
 
@@ -319,6 +320,7 @@ namespace Aspir.Messaging.Nats
                 state.config.TLSRemoteCertificationValidationCallback <- callback
                 state 
 
+<<<<<<< Updated upstream
             member _.Run(state) =
                 let { config = cfg } = state
                 let agent = new ConnectionAgent()
@@ -384,14 +386,26 @@ namespace Aspir.Messaging.Nats
         /// } 
         type SubscriptionBuilder internal () =
             
+<<<<<<< Updated upstream
             member _.Yield _ =
                 { conn = None
+=======
+            member __.Yield _ =
+                { connAgent = None
+>>>>>>> Stashed changes
                   topic = None
                   body = None }
                 
             [<CustomOperation("withConnection")>]
+<<<<<<< Updated upstream
             member _.WithConnection(state, value) =
                 { state with connAgent = Some value }
+                let st = state.initialState
+                         |> Option.map (fun t -> { t with parent = Some value })
+                         |> Option.orElse (Some { parent = Some value
+                                                  actorState = None })
+                { state with conn = Some value
+                             initialState = st }
                 
             [<CustomOperation("topic")>]
             member _.Topic(state, value) =
@@ -468,6 +482,12 @@ namespace Aspir.Messaging.Nats
                 { state with body = Some value }
                                 
             member _.Run(state) =
+=======
+            [<CustomOperation("body")>]
+            member __.Body(state, value) =
+                { state with body = Some value }
+                                
+            member __.Run(state) =
                 match validateSubscriptionBuilderState state with
                 | Error xs ->
                     failwith $"[Error] Unable to create subscription actor owing to the following errors:\n\t{xs}"
@@ -479,6 +499,77 @@ namespace Aspir.Messaging.Nats
         let service = ServiceBuilder() 
 
         
+<<<<<<< Updated upstream
+=======
+        type AgentDelegate = MailboxProcessor<NatsMessage> -> Async<unit> 
+        /// ```fsharp
+        /// 
+        /// let svc = service {
+        ///     useConnection conn
+        ///     listenTo "aspir.workflows.>" AgentPerTopic AgentDelegate 
+        ///     publishTo "aspir.travelers.<empId>.<pnr>.<juris>" AgentDelegate 
+        ///     ** needed? ** replyTo "aspir.travelers.<empId>.travels" AgentDelegate 
+        ///
+        ///     (** FUTURE **)
+        ///     type AgentInstancing = AgentPerTopic | AgentSingleton
+        ///     type ScalePolicy = Scale min: int * max: int 
+        ///     type StartPolicy =
+        ///         | Immediately
+        ///         | StartAfter duration: TimeSpan
+        ///         | StartAt timeOfDay: DateTimeOffset
+        ///     type EndPolicy =
+        ///         | EndAt timeOfDate: DateTimeOffset
+        ///         | EndAfter duration: TimeSpan
+        ///         | Take messageCount: int
+        ///         | Naturally 
+        ///
+        ///     (** FUTURE **)
+        ///     listenTo <topic> <instancing> ([Take n] | [Time t] | [TakeOrTime n t]) <agentDelegate>
+        ///     publishTo <topic> ([SendAfter duration] | [SendAt timeOfDay]) (Repeat <see below>) <agentDelegate> 
+        ///     repeat [Every 2<sec|min|hrs|days|wks|mos> | Monthly (Day 1) | ...]
+        ///     retry RetryPolicy 
+        ///
+        ///     (** Add capabilities to create based on NATS queues or subject wildcards **)
+        ///     TODO: nats pub traveler.<empId>.<travels>.<juris>
+        ///     TODO: nats pub --reply=__INBOX.ab456fd traveler.<empId>.<rewards>.<juris>
+        ///     TODO: sub traveler.>
+        ///     TODO: sub --queue=Travels traveler.*.<travels>.* 
+        /// } 
+        type ServiceBuilder internal () =
+//        type PublisherBuilderState<'a> =
+//            { conn : IActor<Actor.ConnectionMessage<'a>> option }
+            
+            member __.Yield _ =
+                { connAgent = None
+                  topic = None
+                  body = None }
+                
+            [<CustomOperation("withConnection")>]
+            member __.WithConnection(state, value) =
+                { state with connAgent = Some value }
+                
+            [<CustomOperation("topic")>]
+            member __.Topic(state, value) =
+                { state with topic = Some value }
+                
+            [<CustomOperation("body")>]
+            member __.Body(state, value) =
+                { state with body = Some value }
+                                
+            member __.Run(state) =
+>>>>>>> Stashed changes
+                match validateSubscriptionBuilderState state with
+                | Error xs ->
+                    failwith $"[Error] Unable to create subscription actor owing to the following errors:\n\t{xs}"
+                | Ok x ->
+                      let message = fun ch -> SubscribeToTopic (x.topic, x.body, ch)
+                      x.connAgent.Ask(message, None)
+                      |> Result.valueOr (fun ex -> failwith $"[ERROR] {ex.ToString()}")
+                
+        let service = ServiceBuilder() 
+
+        
+>>>>>>> Stashed changes
 //        type PublisherBuilderState<'a> =
 //            { conn : IActor<Actor.ConnectionMessage<'a>> option }
             
@@ -530,4 +621,5 @@ namespace Aspir.Messaging.Nats
 //                
 //        let request = RequesterBuilder()
         
+>>>>>>> Stashed changes
         
