@@ -38,10 +38,10 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="BenchmarkDotNet" Version="0.13.1" />
-      <PackageReference Include="FSharp.Data" Version="4.2.4" />
-      <PackageReference Include="NATS.Client" Version="0.14.0-pre3" />
-      <PackageReference Update="FSharp.Core" Version="6.0.0" />
+      <PackageReference Include="BenchmarkDotNet" Version="0.13.2" />
+      <PackageReference Include="FSharp.Data" Version="5.0.2" />
+      <PackageReference Include="NATS.Client" Version="0.14.9-pre3" />
+      <PackageReference Update="FSharp.Core" Version="6.0.5" />
     </ItemGroup>
 
 </Project>
